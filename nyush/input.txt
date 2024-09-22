@@ -1,0 +1,11 @@
+Makefile
+file.txt
+input.txt
+nyush
+nyush-autograder
+nyush.c
+nyush.o
+nyush.zip
+output.txt
+sampledir1nyus
+sampledir2
