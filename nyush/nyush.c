@@ -405,8 +405,9 @@ void handle_pipes(char **tokens, int cmd_num)
      * concept fd[0] -> read end of the file, fd[1] -> write end fo the file
      * @cite https://www.youtube.com/watch?v=6xbLgZpOBi8&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=23
      * @cite https://www.youtube.com/watch?v=NkfIUo_Qq4c&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=24
+     * @cite https://stackoverflow.com/questions/19461744/how-to-make-parent-wait-for-all-child-processes-to-finish
      */
-    pid_t pid;
+    pid_t pid, ppid;
     int status, file = 0;
     int fd[2];
 
@@ -466,6 +467,19 @@ void handle_pipes(char **tokens, int cmd_num)
                 close(fd[1]);
             }
 
+            // first command: redirect output to pipe's write end
+            if (i == 0)
+                dup2(fd[1], STDOUT_FILENO);
+            // last command: redirect input to pipe's read end
+            else if (i == cmd_num - 1)
+                dup2(file, STDIN_FILENO);
+            // intermediate command: redirect both input and output
+            else
+            {
+                dup2(file, STDIN_FILENO);
+                dup2(fd[1], STDOUT_FILENO);
+            }
+
             // after handling pipes, normally process commands
             process_commands(commands, i, cmd_num);
             exit(1); // eixt if execvp fails
@@ -491,6 +505,7 @@ void handle_pipes(char **tokens, int cmd_num)
             }
         }
     }
+    while ((ppid = wait(&status)) > 0);
 }
 
 int main()
