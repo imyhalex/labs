@@ -20,3 +20,15 @@ nyush.zip
 output.txt
 sampledir1nyus
 sampledir2
+total 88
+-rwxrwxrwx 1 1000 1000   214 Sep 22 13:37 Makefile
+-rwxrwxrwx 1 1000 1000     0 Sep 22 05:43 file.txt
+-rwxrwxrwx 1 1000 1000   114 Sep 22 05:52 input.txt
+-rwxrwxrwx 1 1000 1000 38080 Sep 22 17:03 nyush
+drwxrwxrwx 1 1000 1000   512 Sep 20 17:00 nyush-autograder
+-rwxrwxrwx 1 1000 1000 14068 Sep 22 17:03 nyush.c
+-rwxrwxrwx 1 1000 1000 21904 Sep 22 17:03 nyush.o
+-rwxrwxrwx 1 1000 1000  4154 Sep 22 13:59 nyush.zip
+-rwxrwxrwx 1 1000 1000   228 Sep 22 13:57 output.txt
+drwxrwxrwx 1 1000 1000   512 Sep 22 04:20 sampledir1
+drwxrwxrwx 1 1000 1000   512 Sep 21 23:31 sampledir2

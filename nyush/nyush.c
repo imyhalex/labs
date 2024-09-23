@@ -13,6 +13,84 @@
 #define MAX_INPUT_SIZE 1000
 #define ARGS_SLOT 20
 #define DELIMITER " \t\r\n\a" //  Delimiters are space, tab, carriage return, newline, and bell character
+#define MAX_JOBS 100
+
+/**
+ * References for jobs & fg command:
+ * @cite https://github.com/solomonw1/basic_shell/blob/master/jobs.c
+ * @cite https://github.com/hungys/mysh/blob/master/mysh.c
+ * @cite https://github.com/ImaginationZ/Shell/blob/master/exec.c
+ * @cite https://www.youtube.com/watch?v=3MZjaZxZYrE&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=18
+ * @cite https://www.youtube.com/watch?v=7ud2iqu9szk&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=19
+ */
+typedef struct job
+{
+    int index;
+    pid_t pid;
+    char *command;
+} job;
+
+/** Some global variables for jobs*/
+int job_cnt = 0;
+job job_list[MAX_JOBS];
+
+void init_jobs()
+{
+    job_cnt = 0;
+    int i;
+    for (i = 0; i < MAX_JOBS; i++)
+    {
+        job_list[i].index = 0;
+        job_list[i].pid = 0;
+        job_list[i].command = NULL;
+    }
+}
+
+void add_job(pid_t pid, char *command)
+{
+    if (job_cnt >= MAX_JOBS)
+    {
+        fprintf(stderr, "Error: job list is full\n");
+        return;
+    }
+
+    job_list[job_cnt].index = job_cnt + 1;
+    job_list[job_cnt].pid = pid;
+    job_list[job_cnt].command = strdup(command);
+    job_cnt++;
+}
+
+void remove_job(pid_t pid)
+{
+    int i;
+    for (i = 0; i < job_cnt; i++)
+    {
+        if (job_list[i].pid == pid)
+        {
+            free(job_list[i].command);
+            int j;
+            for (j = i; j < job_cnt - 1; j++)
+            {
+                job_list[j] = job_list[j + 1];
+                job_list[j].index = j + 1;
+            }
+            job_cnt--;
+            break;
+        }
+    }
+}
+
+// void sigchild_handler(int sig)
+// {
+//     (void) sig;
+//     pid_t pid;
+//     int status;
+//     while (pid = waitpid(-1, &status, WUNTRACED | WNOHANG))
+//     {
+//         if (WIFEXITED(status))
+//             add_job(pid);
+//     }
+// }
 
 void ignore_signals()
 {
@@ -26,6 +104,7 @@ void reset_signals()
     signal(SIGINT, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
+    signal()
 }
 
 char *get_cwd()
@@ -397,6 +476,7 @@ void handle_pipes(char **tokens, int cmd_num)
 
 int main()
 {
+    init_jobs();
     ignore_signals();
 
     /**
@@ -445,11 +525,12 @@ int main()
                 if (dir_status == -1)
                     fprintf(stderr, "Error: invalid directory\n");
             }
+            free(tokens);
             // skip the rest of the process
             continue;
         }
 
-        // haldle the built-in command: exit
+        // handle the built-in command: exit
         if (strcmp(tokens[0], "exit") == 0)
         {
             // exit cannot have any following tokens
@@ -462,8 +543,26 @@ int main()
                 // terminate the shell if there no suspended jobs + no invalid arguments
                 exit(0);
             }
+            free(tokens);
             continue;
         }
+
+        // handle the built-in command: jobs
+        if (strcmp(tokens[0], "jobs") == 0)
+        {
+            if (tokens[1] != NULL)
+                fprintf(stderr, "Error: invalid command\n");
+            else
+            {
+                int i;
+                for (i = 0; i < job_cnt; i++)
+                    printf("[%d] %s\n", job_list[i].index, job_list[i].command);
+            }
+            free(tokens);
+            continue;
+        }
+
+        // handle the built-in command: fg
 
         int cmd_num = 1, i;
         for (i = 0; tokens[i] != NULL; i++)
