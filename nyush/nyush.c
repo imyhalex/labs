@@ -22,6 +22,7 @@
  * @cite https://github.com/ImaginationZ/Shell/blob/master/exec.c
  * @cite https://www.youtube.com/watch?v=3MZjaZxZYrE&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=18
  * @cite https://www.youtube.com/watch?v=7ud2iqu9szk&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=19
+ * @cite https://www.youtube.com/watch?v=jF-1eFhyz1U&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=19
  */
 typedef struct job
 {
@@ -33,6 +34,7 @@ typedef struct job
 /** Some global variables for jobs*/
 int job_cnt = 0;
 job job_list[MAX_JOBS];
+char *current_command_line = NULL;
 
 void init_jobs()
 {
@@ -46,7 +48,7 @@ void init_jobs()
     }
 }
 
-void add_job(pid_t pid, char *command)
+void add_job(pid_t pid)
 {
     if (job_cnt >= MAX_JOBS)
     {
@@ -56,7 +58,7 @@ void add_job(pid_t pid, char *command)
 
     job_list[job_cnt].index = job_cnt + 1;
     job_list[job_cnt].pid = pid;
-    job_list[job_cnt].command = strdup(command);
+    job_list[job_cnt].command = strdup(current_command_line);
     job_cnt++;
 }
 
@@ -80,23 +82,28 @@ void remove_job(pid_t pid)
     }
 }
 
-// void sigchild_handler(int sig)
-// {
-//     (void) sig;
-//     pid_t pid;
-//     int status;
-//     while (pid = waitpid(-1, &status, WUNTRACED | WNOHANG))
-//     {
-//         if (WIFEXITED(status))
-//             add_job(pid);
-//     }
-// }
+void reap_children_handler(int sig)
+{
+    (void) sig;
+    pid_t pid;
+    int status;
+    while ((pid = waitpid(-1, &status, WUNTRACED | WNOHANG)) > 0)
+    {
+        // if child was stopped, add to job list
+        if (WIFSTOPPED(status))
+            add_job(pid);
+        // if child exit or terminated, remove from job list
+        else if (WIFEXITED(status) || WIFSIGNALED(status))
+            remove_job(pid);
+    }
+}
 
 void ignore_signals()
 {
     signal(SIGINT, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
+    signal(SIGCHLD, reap_children_handler);
 }
 
 void reset_signals()
@@ -104,7 +111,7 @@ void reset_signals()
     signal(SIGINT, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
-    signal()
+    signal(SIGCHLD, SIG_DFL);
 }
 
 char *get_cwd()
@@ -192,6 +199,18 @@ char **read_parse_line()
         free(line);
         return NULL;
     }
+
+    /** for current_command_line global variable */
+    char *line_cpy = strdup(line);
+    if (line[result -1] == '\n')
+        line[result - 1] = '\0';
+
+    // store or update the current command line
+    if (current_command_line != NULL)
+        free(current_command_line);
+    current_command_line = strdup(line_cpy);
+    free(line_cpy);
+    /** *************************************** */
 
     tokens = malloc(size * sizeof(char *));
     if (!tokens)
@@ -369,7 +388,7 @@ void process_commands(char **tokens, int pos, int cmd_num)
         else
             commands[index++] = tokens[j++];
     }
-    commands[index] = NULL;
+    commands[index] = '\0';
 
     int status_code = execvp(commands[0], commands);
     // if execvp has return value, it means new program is not executed successfully
@@ -506,6 +525,7 @@ int main()
             continue;
         }
 
+
         // handle the built-in command: cd
         if (strcmp(tokens[0], "cd") == 0)
         {
@@ -529,6 +549,7 @@ int main()
             // skip the rest of the process
             continue;
         }
+
 
         // handle the built-in command: exit
         if (strcmp(tokens[0], "exit") == 0)
@@ -563,6 +584,35 @@ int main()
         }
 
         // handle the built-in command: fg
+        if (strcmp(tokens[0], "fg") == 0)
+        {
+            if (tokens[1] == NULL)
+                fprintf(stderr, "Error: invalid command\n");
+            else
+            {
+                int job_index = atoi(tokens[1]);
+                if (job_index <= 0 || job_index > job_cnt)
+                    fprintf(stderr, "Error: invalid job\n");
+                else
+                {
+                    pid_t pid = job_list[job_index - 1].pid;
+                    remove_job(pid);
+
+                    int continue_status = kill(pid, SIGCONT);
+                    if (continue_status == -1)
+                        perror("kill");
+                    else
+                    {
+                        int status;
+                        waitpid(pid, &status, WUNTRACED);
+
+                        // if the process stopped again
+                        if (WIFSTOPPED(status))
+                            add_job(pid);
+                    }
+                }
+            }
+        }
 
         int cmd_num = 1, i;
         for (i = 0; tokens[i] != NULL; i++)
@@ -602,13 +652,13 @@ int main()
                     if (status_code != 0)
                         fprintf(stderr, "Error: error child status %d\n", status_code);
                 }
+
+                // if (WIFSTOPPED(status))
+                //     add_job(pid);
+                // else if (WIFEXITED(status) || WIFSIGNALED(status))
+                //     remove_job(pid);
             }
         }
-
-        // // clean up
-        // int i;
-        // for (i = 0; tokens[i] != NULL; i++)
-        //     free(tokens[i]);
         free(tokens);
     }
     return 0;
