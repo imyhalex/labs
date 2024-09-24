@@ -82,28 +82,11 @@ void remove_job(pid_t pid)
     }
 }
 
-void reap_children_handler(int sig)
-{
-    (void) sig;
-    pid_t pid;
-    int status;
-    while ((pid = waitpid(-1, &status, WUNTRACED | WNOHANG)) > 0)
-    {
-        // if child was stopped, add to job list
-        if (WIFSTOPPED(status))
-            add_job(pid);
-        // if child exit or terminated, remove from job list
-        else if (WIFEXITED(status) || WIFSIGNALED(status))
-            remove_job(pid);
-    }
-}
-
 void ignore_signals()
 {
     signal(SIGINT, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
-    signal(SIGCHLD, reap_children_handler);
 }
 
 void reset_signals()
@@ -111,7 +94,6 @@ void reset_signals()
     signal(SIGINT, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
-    signal(SIGCHLD, SIG_DFL);
 }
 
 char *get_cwd()
@@ -195,7 +177,7 @@ char **read_parse_line()
 
     if (result > MAX_INPUT_SIZE)
     {
-        perror("Error");
+        fprintf(stderr, "Error: invalid command\n");
         free(line);
         return NULL;
     }
@@ -226,7 +208,7 @@ char **read_parse_line()
         i++;
 
         // if ARGS_SLOT is filled up
-        if (i > size)
+        if (i >= size)
         {
             size += ARGS_SLOT;
             tokens = realloc(tokens, size * sizeof(char *));
@@ -240,7 +222,7 @@ char **read_parse_line()
         token = strtok(NULL, DELIMITER);
     }
 
-    tokens[i] = '\0';
+    tokens[i] = NULL;
     return tokens;
 }
 
@@ -336,10 +318,7 @@ void process_commands(char **tokens, int pos, int cmd_num)
         int file = open(in, O_RDONLY);
         if (file < 0)
         {
-            if (errno == ENOENT)
-                fprintf(stderr, "Error: invalid file\n");
-            else
-                perror("open");
+            fprintf(stderr, "Error: invalid file\n");
             exit(1);
         }
 
@@ -388,13 +367,13 @@ void process_commands(char **tokens, int pos, int cmd_num)
         else
             commands[index++] = tokens[j++];
     }
-    commands[index] = '\0';
+    commands[index] = NULL;
 
     int status_code = execvp(commands[0], commands);
     // if execvp has return value, it means new program is not executed successfully
     if (status_code == -1)
     {
-        perror("execvp");
+        fprintf(stderr, "Error: invalid program\n");
         exit(1);
     }
 }
@@ -405,14 +384,15 @@ void handle_pipes(char **tokens, int cmd_num)
      * concept fd[0] -> read end of the file, fd[1] -> write end fo the file
      * @cite https://www.youtube.com/watch?v=6xbLgZpOBi8&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=23
      * @cite https://www.youtube.com/watch?v=NkfIUo_Qq4c&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=24
+     * case 32 hint from discord: "For case 32, your shell should execute all programs in the pipeline concurrently, not sequentially"
      * @cite https://stackoverflow.com/questions/19461744/how-to-make-parent-wait-for-all-child-processes-to-finish
      */
-    pid_t pid, ppid;
+    pid_t pid;
     int status, file = 0;
     int fd[2];
 
     int i, cmd_start = 0; // cmd_start marks index of the start of the current command in tokens
-    for (i = 0; i < cmd_num; i++)
+    for (i = 0; i < cmd_num; i++) 
     {
         // build up commands for execvp
         int len = get_tokens_length(tokens), index = 0;
@@ -467,45 +447,28 @@ void handle_pipes(char **tokens, int cmd_num)
                 close(fd[1]);
             }
 
-            // first command: redirect output to pipe's write end
-            if (i == 0)
-                dup2(fd[1], STDOUT_FILENO);
-            // last command: redirect input to pipe's read end
-            else if (i == cmd_num - 1)
-                dup2(file, STDIN_FILENO);
-            // intermediate command: redirect both input and output
-            else
-            {
-                dup2(file, STDIN_FILENO);
-                dup2(fd[1], STDOUT_FILENO);
-            }
-
             // after handling pipes, normally process commands
             process_commands(commands, i, cmd_num);
             exit(1); // eixt if execvp fails
         }
+        /** This part is parent process */
+        if (file != 0)
+            close(file);
+
+        // if end of the pipe and save the read end of the pipe for the next command
+        if (i < cmd_num - 1)
+        {
+            close(fd[1]);
+            file = fd[0];
+        }
         else
         {
-            if (file != 0)
-                close(file);
-
-            // if end of the pipe and save the read end of the pipe for the next command
-            if (i < cmd_num - 1)
-            {
-                close(fd[1]);
-                file = fd[0];
-            }
-
-            waitpid(pid, &status, 0);
-            if (WIFEXITED(status))
-            {
-                int status_code = WEXITSTATUS(status);
-                if (status_code != 0)
-                    fprintf(stderr, "Error: error child status %d\n", status_code);
-            }
+            // close the read end
+            if (fd[0] != -1)
+                close(fd[0]);
         }
     }
-    while ((ppid = wait(&status)) > 0);
+    while ((pid = wait(&status)) > 0);
 }
 
 int main()
@@ -540,7 +503,6 @@ int main()
             continue;
         }
 
-
         // handle the built-in command: cd
         if (strcmp(tokens[0], "cd") == 0)
         {
@@ -572,6 +534,8 @@ int main()
             // exit cannot have any following tokens
             if (tokens[1] != NULL)
                 fprintf(stderr, "Error: invalid command\n");
+            else if (job_cnt > 0)
+                fprintf(stderr, "There are suspended jobs\n");
             else
             {
                 // if there are suspended jobs
@@ -636,6 +600,7 @@ int main()
                 cmd_num++;
         }
 
+        /** execute commands: two scenarios */
         if (cmd_num > 1)
             handle_pipes(tokens, cmd_num);
         else
@@ -667,11 +632,6 @@ int main()
                     if (status_code != 0)
                         fprintf(stderr, "Error: error child status %d\n", status_code);
                 }
-
-                // if (WIFSTOPPED(status))
-                //     add_job(pid);
-                // else if (WIFEXITED(status) || WIFSIGNALED(status))
-                //     remove_job(pid);
             }
         }
         free(tokens);
