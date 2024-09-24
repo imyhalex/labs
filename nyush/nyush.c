@@ -112,6 +112,14 @@ char *get_cwd()
 
 char *get_base_name(char *cwd)
 {
+    // for home directory 
+    char *dir = getenv("HOME");
+
+    if (strcmp(cwd, "/") == 0)
+        return "/";
+
+    if (dir != NULL && strcmp(cwd, dir) == 0)
+        return "~";
     // make a copy of cwd for safty reason
     char cwd_copy[PATH_MAX];
     strncpy(cwd_copy, cwd, PATH_MAX - 1);
@@ -126,6 +134,7 @@ char *get_base_name(char *cwd)
         last_token = token;
         token = strtok(NULL, "/");
     }
+
     return last_token;
 }
 
@@ -512,6 +521,16 @@ int main()
                 fprintf(stderr, "Error: invalid command\n");
             else
             {
+                if (strcmp(tokens[1], "~") == 0)
+                {
+                    char *dir = getenv("HOME");
+                    if (dir == NULL)
+                    {
+                        perror("home");
+                        exit(1);
+                    }
+                    tokens[1] = dir;
+                }
                 // change directory
                 int dir_status = chdir(tokens[1]);
                 // if failed
