@@ -1,5 +1,0 @@
-./print_numbers_stopped
-jobs
-exit
-fg 1
-exit

@@ -1,3 +1,0 @@
-cat - input.txt < input.txt | sort > output6.txt
-cat output6.txt
-exit

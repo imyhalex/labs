@@ -1,3 +1,0 @@
-echo world >> append.txt
-cat append.txt
-exit

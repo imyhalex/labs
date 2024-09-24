@@ -1,3 +1,0 @@
-echo -e hello\nworld\nhello | sort -r
-ps | grep defunct
-exit

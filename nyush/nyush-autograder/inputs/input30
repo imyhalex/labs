@@ -1,3 +1,0 @@
-cat - input.txt >> append3.txt < input.txt
-cat append3.txt
-exit

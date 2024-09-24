@@ -1,3 +1,0 @@
-cat input.txt | sort | uniq > output7.txt
-cat output7.txt
-exit

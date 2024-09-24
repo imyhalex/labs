@@ -1,3 +1,0 @@
-How to use the autograder:
-1. Copy your zip archive to the nyush-autograder directory
-2. Inside the nyush-autograder directory, run ./gradeit.sh

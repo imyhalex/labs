@@ -506,27 +506,22 @@ int main()
         // handle the built-in command: cd
         if (strcmp(tokens[0], "cd") == 0)
         {
-            int args_num = 0;
+            int args_num = get_tokens_length(tokens) - 1;
             // if cd is called with 0 or 2+ arguments
-            int i;
-            for (i = 1; tokens[i] != NULL; i++)
-                args_num++;
-
-            if (args_num != 1)
+            if (args_num == 0 || args_num > 1)
                 fprintf(stderr, "Error: invalid command\n");
             else
             {
                 // change directory
                 int dir_status = chdir(tokens[1]);
                 // if failed
-                if (dir_status == -1)
+                if (dir_status != 0)
                     fprintf(stderr, "Error: invalid directory\n");
             }
             free(tokens);
             // skip the rest of the process
             continue;
         }
-
 
         // handle the built-in command: exit
         if (strcmp(tokens[0], "exit") == 0)
@@ -565,7 +560,7 @@ int main()
         // handle the built-in command: fg
         if (strcmp(tokens[0], "fg") == 0)
         {
-            if (tokens[1] == NULL)
+            if (tokens[1] == NULL || get_tokens_length(tokens) != 2)
                 fprintf(stderr, "Error: invalid command\n");
             else
             {
