@@ -17,9 +17,9 @@
 
 /**
  * References for jobs & fg command:
- * @cite https://github.com/solomonw1/basic_shell/blob/master/jobs.c
  * @cite https://github.com/hungys/mysh/blob/master/mysh.c
  * @cite https://github.com/ImaginationZ/Shell/blob/master/exec.c
+ * @cite https://github.com/solomonw1/basic_shell/blob/master/jobs.c
  * @cite https://www.youtube.com/watch?v=3MZjaZxZYrE&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=18
  * @cite https://www.youtube.com/watch?v=7ud2iqu9szk&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=19
  * @cite https://www.youtube.com/watch?v=jF-1eFhyz1U&list=PLfqABt5AS4FkW5mOn2Tn9ZZLLDwA3kZUY&index=19
@@ -35,6 +35,14 @@ typedef struct job
 int job_cnt = 0;
 job job_list[MAX_JOBS];
 char *current_command_line = NULL;
+char *token = NULL;
+
+/**
+ * global signal flag
+ * @cite https://en.cppreference.com/w/c/program/sig_atomic_t
+ * @cite https://www.geeksforgeeks.org/understanding-volatile-qualifier-in-c/
+ */
+volatile sig_atomic_t sig_received = 0;
 
 void init_jobs()
 {
@@ -82,9 +90,24 @@ void remove_job(pid_t pid)
     }
 }
 
+void print_prompt(char *token)
+{
+
+    printf("[nyush %s]$ ", token);
+    fflush(stdout);
+}
+
+void sigint_handler(int sig)
+{
+    sig_received = 1;
+    (void) sig;
+    printf("\n");
+    print_prompt(token);
+}
+
 void ignore_signals()
 {
-    signal(SIGINT, SIG_IGN);
+    signal(SIGINT, sigint_handler);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
 }
@@ -136,13 +159,6 @@ char *get_base_name(char *cwd)
     }
 
     return last_token;
-}
-
-void print_prompt(char *token)
-{
-
-    printf("[nyush %s]$ ", token);
-    fflush(stdout);
 }
 
 char **read_parse_line()
@@ -499,8 +515,9 @@ int main()
         cwd = get_cwd();
 
         // initial shell input
-        char *base_name = get_base_name(cwd);
-        print_prompt(base_name);
+        token = get_base_name(cwd);
+        if (sig_received == 0)
+            print_prompt(token);
 
         // read line from stdin
         tokens = read_parse_line();
@@ -635,17 +652,8 @@ int main()
             }
             else
             {
+                sig_received = 0; // reset the flag back to zero for continue printing
                 waitpid(pid, &status, 0);
-                /**
-                 * It migth be optional but I think this is pretty good so I added it
-                 * @cite https://www.youtube.com/watch?v=DiNmwwQWl0g
-                 */
-                if (WIFEXITED(status))
-                {
-                    int status_code = WEXITSTATUS(status);
-                    if (status_code != 0)
-                        fprintf(stderr, "Error: error child status %d\n", status_code);
-                }
             }
         }
         free(tokens);
