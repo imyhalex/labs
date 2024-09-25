@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.rmd": "markdown",
+        "*.sql": "sql",
+        "stdio.h": "c"
+    }
+}

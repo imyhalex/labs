@@ -34,11 +34,11 @@ typedef struct job
 /** Some global variables for jobs*/
 int job_cnt = 0;
 job job_list[MAX_JOBS];
-char *current_command_line = NULL;
-char *token = NULL;
+char *current_command_line = NULL; // command holder to hold currrent stopped job
+char *token = NULL; // constantly update the basename
 
 /**
- * global signal flag
+ * global signal flag, ctrl-c key control
  * @cite https://en.cppreference.com/w/c/program/sig_atomic_t
  * @cite https://www.geeksforgeeks.org/understanding-volatile-qualifier-in-c/
  */
@@ -90,11 +90,26 @@ void remove_job(pid_t pid)
     }
 }
 
+void list_jobs()
+{
+    int i;
+    for (i = 0; i < job_cnt; i++)
+    {
+        printf("[%d] %s\n", job_list[i].index, job_list[i].command);
+    }
+}
+
 void print_prompt(char *token)
 {
 
     printf("[nyush %s]$ ", token);
     fflush(stdout);
+}
+
+void stp_process(pid_t pid)
+{
+    // this function will send a SIGTSTP signal to the process and create child process for that stopped process
+    add_job(pid);
 }
 
 void sigint_handler(int sig)
@@ -105,11 +120,16 @@ void sigint_handler(int sig)
     print_prompt(token);
 }
 
+void sigstp_handler(int sig)
+{
+    (void) sig;
+}
+
 void ignore_signals()
 {
     signal(SIGINT, sigint_handler);
     signal(SIGQUIT, SIG_IGN);
-    signal(SIGTSTP, SIG_IGN);
+    signal(SIGTSTP, sigstp_handler);
 }
 
 void reset_signals()
@@ -143,6 +163,7 @@ char *get_base_name(char *cwd)
 
     if (dir != NULL && strcmp(cwd, dir) == 0)
         return "~";
+
     // make a copy of cwd for safty reason
     char cwd_copy[PATH_MAX];
     strncpy(cwd_copy, cwd, PATH_MAX - 1);
@@ -583,12 +604,8 @@ int main()
         {
             if (tokens[1] != NULL)
                 fprintf(stderr, "Error: invalid command\n");
-            else
-            {
-                int i;
-                for (i = 0; i < job_cnt; i++)
-                    printf("[%d] %s\n", job_list[i].index, job_list[i].command);
-            }
+            else 
+                list_jobs();
             free(tokens);
             continue;
         }
@@ -605,21 +622,20 @@ int main()
                     fprintf(stderr, "Error: invalid job\n");
                 else
                 {
-                    pid_t pid = job_list[job_index - 1].pid;
-                    remove_job(pid);
+                    pid_t jpid = job_list[job_index - 1].pid;
+                    remove_job(jpid);
 
-                    int continue_status = kill(pid, SIGCONT);
-                    if (continue_status == -1)
-                        perror("kill");
-                    else
+                    if (kill(pid, SIGCONT) == -1)
                     {
-                        int status;
-                        waitpid(pid, &status, WUNTRACED);
-
-                        // if the process stopped again
-                        if (WIFSTOPPED(status))
-                            add_job(pid);
+                        perror("kill");
+                        continue;
                     }
+                    int status;
+                    waitpid(jpid, &status, WUNTRACED);
+
+                    // if the process stopped again
+                    if (WIFSTOPPED(status))
+                        add_job(jpid);
                 }
             }
         }
@@ -631,7 +647,7 @@ int main()
                 cmd_num++;
         }
 
-        /** execute commands: two scenarios */
+        /** execute commands: two scenarios: with pipes or not pipes */
         if (cmd_num > 1)
             handle_pipes(tokens, cmd_num);
         else
@@ -653,7 +669,15 @@ int main()
             else
             {
                 sig_received = 0; // reset the flag back to zero for continue printing
-                waitpid(pid, &status, 0);
+                /**
+                 * man 2 waitpid ->  WUNTRACED: also return if a child has stopped (but not traced via ptrace(2)).
+                 * Status for traced children which  have stopped is provided even if this option is not specified.
+                 */
+                waitpid(pid, &status, WUNTRACED);
+
+                // add stopped job to the list if the process is stopped
+                if (WIFSTOPPED(status))
+                    stp_process(pid);
             }
         }
         free(tokens);
