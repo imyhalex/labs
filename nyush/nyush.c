@@ -108,7 +108,6 @@ void list_jobs()
         else
         {
             printf("[%d] %s\n", job_list[i].index, job_list[i].command);
-            fflush(stdout);
         }
     }
 }
@@ -657,6 +656,7 @@ int main()
             continue;
         }
 
+        // track how many commands of user input: e.g. `cat < input.txt | cat | cat >> output.txt` is 3, no pipe is 1
         int cmd_num = 1, i;
         for (i = 0; tokens[i] != NULL; i++)
         {
