@@ -95,7 +95,21 @@ void list_jobs()
     int i;
     for (i = 0; i < job_cnt; i++)
     {
-        printf("[%d] %s\n", job_list[i].index, job_list[i].command);
+        if (i == 0)
+        {
+            printf("[%d] %s", job_list[i].index, job_list[i].command);
+            fflush(stdout);
+        }
+        else if (i == job_cnt -1)
+        {
+            printf("[%d] %s", job_list[i].index, job_list[i].command);
+            fflush(stdout);
+        }
+        else
+        {
+            printf("[%d] %s\n", job_list[i].index, job_list[i].command);
+            fflush(stdout);
+        }
     }
 }
 
@@ -576,7 +590,7 @@ int main()
                     fprintf(stderr, "Error: invalid directory\n");
             }
             free(tokens);
-            // skip the rest of the process
+            // skip the rest of code
             continue;
         }
 
@@ -625,7 +639,7 @@ int main()
                     pid_t jpid = job_list[job_index - 1].pid;
                     remove_job(jpid);
 
-                    if (kill(pid, SIGCONT) == -1)
+                    if (kill(jpid, SIGCONT) == -1)
                     {
                         perror("kill");
                         continue;
@@ -638,6 +652,8 @@ int main()
                         add_job(jpid);
                 }
             }
+            free(tokens);
+            continue;
         }
 
         int cmd_num = 1, i;
