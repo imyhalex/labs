@@ -56,7 +56,7 @@ void init_jobs()
     }
 }
 
-void add_job(pid_t pid)
+void append_job(pid_t pid)
 {
     if (job_cnt >= MAX_JOBS)
     {
@@ -70,7 +70,7 @@ void add_job(pid_t pid)
     job_cnt++;
 }
 
-void remove_job(pid_t pid)
+void delete_job(pid_t pid)
 {
     int i;
     for (i = 0; i < job_cnt; i++)
@@ -123,7 +123,7 @@ void print_prompt(char *token)
 void stp_process(pid_t pid)
 {
     // this function will send a SIGTSTP signal to the process and create child process for that stopped process
-    add_job(pid);
+    append_job(pid);
 }
 
 void sigint_handler(int sig)
@@ -636,8 +636,9 @@ int main()
                     fprintf(stderr, "Error: invalid job\n");
                 else
                 {
+                    // get the suspended job pid 
                     pid_t jpid = job_list[job_index - 1].pid;
-                    remove_job(jpid);
+                    delete_job(jpid);
 
                     if (kill(jpid, SIGCONT) == -1)
                     {
@@ -649,7 +650,7 @@ int main()
 
                     // if the process stopped again
                     if (WIFSTOPPED(status))
-                        add_job(jpid);
+                        append_job(jpid);
                 }
             }
             free(tokens);
