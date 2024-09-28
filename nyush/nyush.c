@@ -232,12 +232,7 @@ char **read_parse_line()
 
     /** for current_command_line global variable */
     if (line[result -1] == '\n')
-        line[result - 1] = '\0'; // we don't want commands stored in job list contains newline character
-
-    // store or update the current command line
-    if (current_command_line != NULL)
-        free(current_command_line);
-    current_command_line = strdup(line);
+        line[result - 1] = '\0'; // commands stored in job list should not contains newline character
     /** *************************************** */
 
     tokens = malloc(size * sizeof(char *));
@@ -267,6 +262,20 @@ char **read_parse_line()
 
         token = strtok(NULL, DELIMITER);
     }
+
+    /** fixing some command printing error */
+    int is_builtin = 0; 
+    if (strcmp(tokens[0], "fg") == 0 || strcmp(tokens[0], "jobs") == 0 || strcmp(tokens[0], "exit") == 0 || strcmp(tokens[0], "cd") == 0)
+        is_builtin = 1;
+    
+    if (is_builtin == 0)
+    {
+        // store or update the current command line
+        if (current_command_line != NULL)
+            free(current_command_line);
+        current_command_line = strdup(line);
+    }
+    /** *************************************** */
 
     tokens[i] = NULL;
     return tokens;
