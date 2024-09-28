@@ -56,7 +56,7 @@ void init_jobs()
     }
 }
 
-void append_job(pid_t pid)
+void append_job(pid_t pid, char *command)
 {
     if (job_cnt >= MAX_JOBS)
     {
@@ -66,7 +66,7 @@ void append_job(pid_t pid)
 
     job_list[job_cnt].index = job_cnt + 1;
     job_list[job_cnt].pid = pid;
-    job_list[job_cnt].command = strdup(current_command_line);
+    job_list[job_cnt].command = strdup(command);
     job_cnt++;
 }
 
@@ -111,7 +111,7 @@ void print_prompt(char *token)
 void stp_process(pid_t pid)
 {
     // this function will send a SIGTSTP signal to the process and create child process for that stopped process
-    append_job(pid);
+    append_job(pid, current_command_line);
 }
 
 void sigint_handler(int sig)
@@ -233,6 +233,11 @@ char **read_parse_line()
     /** for current_command_line global variable */
     if (line[result -1] == '\n')
         line[result - 1] = '\0'; // commands stored in job list should not contains newline character
+
+    // store or update the current command line
+    if (current_command_line != NULL)
+        free(current_command_line);
+    current_command_line = strdup(line);
     /** *************************************** */
 
     tokens = malloc(size * sizeof(char *));
@@ -263,19 +268,19 @@ char **read_parse_line()
         token = strtok(NULL, DELIMITER);
     }
 
-    /** fixing some command printing error */
-    int is_builtin = 0; 
-    if (strcmp(tokens[0], "fg") == 0 || strcmp(tokens[0], "jobs") == 0 || strcmp(tokens[0], "exit") == 0 || strcmp(tokens[0], "cd") == 0)
-        is_builtin = 1;
+    // /** fixing some command printing error */
+    // int is_builtin = 0; 
+    // if (strcmp(tokens[0], "fg") == 0 || strcmp(tokens[0], "jobs") == 0 || strcmp(tokens[0], "exit") == 0 || strcmp(tokens[0], "cd") == 0)
+    //     is_builtin = 1;
     
-    if (is_builtin == 0)
-    {
-        // store or update the current command line
-        if (current_command_line != NULL)
-            free(current_command_line);
-        current_command_line = strdup(line);
-    }
-    /** *************************************** */
+    // if (is_builtin == 0)
+    // {
+    //     // store or update the current command line
+    //     if (current_command_line != NULL)
+    //         free(current_command_line);
+    //     current_command_line = strdup(line);
+    // }
+    // /** *************************************** */
 
     tokens[i] = NULL;
     return tokens;
@@ -634,6 +639,7 @@ int main()
                 {
                     // get the suspended job pid 
                     pid_t jpid = job_list[job_index - 1].pid;
+                    char *command_cpy = strdup(job_list[job_index - 1].command); // hold the job suspended command
                     delete_job(jpid);
 
                     if (kill(jpid, SIGCONT) == -1)
@@ -646,7 +652,8 @@ int main()
 
                     // if the process stopped again
                     if (WIFSTOPPED(status))
-                        append_job(jpid);
+                        append_job(jpid, command_cpy);
+                    free(command_cpy);
                 }
             }
             free(tokens);
