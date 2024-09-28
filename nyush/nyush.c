@@ -34,8 +34,8 @@ typedef struct job
 /** Some global variables for jobs*/
 int job_cnt = 0;
 job job_list[MAX_JOBS];
-char *current_command_line = NULL; // command holder to hold currrent stopped job
-char *token = NULL; // constantly update the basename
+char *current_command_line = NULL; // command container to hold currrent stopped job
+char *token = NULL; // basename container: constantly update the basename
 
 /**
  * global signal flag, ctrl-c key control
@@ -90,26 +90,15 @@ void delete_job(pid_t pid)
     }
 }
 
-void list_jobs()
+void display_jobs()
 {
-    int i;
-    for (i = 0; i < job_cnt; i++)
+    int i = 0;
+    while (i < job_cnt)
     {
-        if (i == 0)
-        {
-            printf("[%d] %s", job_list[i].index, job_list[i].command);
-            fflush(stdout);
-        }
-        else if (i == job_cnt -1)
-        {
-            printf("[%d] %s", job_list[i].index, job_list[i].command);
-            fflush(stdout);
-        }
-        else
-        {
-            printf("[%d] %s\n", job_list[i].index, job_list[i].command);
-        }
+        printf("[%d] %s\n", job_list[i].index, job_list[i].command);
+        i++;
     }
+    fflush(stdout);
 }
 
 void print_prompt(char *token)
@@ -242,15 +231,13 @@ char **read_parse_line()
     }
 
     /** for current_command_line global variable */
-    char *line_cpy = strdup(line);
     if (line[result -1] == '\n')
-        line[result - 1] = '\0';
+        line[result - 1] = '\0'; // we don't want commands stored in job list contains newline character
 
     // store or update the current command line
     if (current_command_line != NULL)
         free(current_command_line);
-    current_command_line = strdup(line_cpy);
-    free(line_cpy);
+    current_command_line = strdup(line);
     /** *************************************** */
 
     tokens = malloc(size * sizeof(char *));
@@ -295,6 +282,7 @@ int get_tokens_length(char **tokens)
 
 void process_commands(char **tokens, int pos, int cmd_num)
 {
+    // define flages for valid redirection rule
     int allow_input_redirection = 0, allow_output_redirection = 0;
 
     // determine whether to allow I/O redirection
@@ -600,7 +588,7 @@ int main()
             if (tokens[1] != NULL)
                 fprintf(stderr, "Error: invalid command\n");
             else if (job_cnt > 0)
-                fprintf(stderr, "There are suspended jobs\n");
+                fprintf(stderr, "Error: there are suspended jobs\n");
             else
             {
                 // if there are suspended jobs
@@ -618,7 +606,7 @@ int main()
             if (tokens[1] != NULL)
                 fprintf(stderr, "Error: invalid command\n");
             else 
-                list_jobs();
+                display_jobs();
             free(tokens);
             continue;
         }
