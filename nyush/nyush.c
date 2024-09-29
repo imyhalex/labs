@@ -98,8 +98,7 @@ void display_jobs()
         printf("[%d] %s\n", job_list[i].index, job_list[i].command);
         i++;
     }
-    fflush(stdout);
-}
+} 
 
 void print_prompt(char *token)
 {
@@ -122,16 +121,11 @@ void sigint_handler(int sig)
     print_prompt(token);
 }
 
-void sigstp_handler(int sig)
-{
-    (void) sig;
-}
-
 void ignore_signals()
 {
     signal(SIGINT, sigint_handler);
     signal(SIGQUIT, SIG_IGN);
-    signal(SIGTSTP, sigstp_handler);
+    signal(SIGTSTP, SIG_IGN);
 }
 
 void reset_signals()
@@ -157,14 +151,8 @@ char *get_cwd()
 
 char *get_base_name(char *cwd)
 {
-    // for home directory 
-    char *dir = getenv("HOME");
-
     if (strcmp(cwd, "/") == 0)
         return "/";
-
-    if (dir != NULL && strcmp(cwd, dir) == 0)
-        return "~";
 
     // make a copy of cwd for safty reason
     char cwd_copy[PATH_MAX];
@@ -315,19 +303,33 @@ void process_commands(char **tokens, int pos, int cmd_num)
         {
             if (allow_input_redirection)
             {
+                if (in_redirect != -1)
+                {
+                    fprintf(stderr, "Error: invalid command\n");
+                    exit(1);
+                }
                 in_redirect = i;
                 if (tokens[i + 1] != NULL)
                     in = tokens[i + 1];
                 else
                 {
-                    fprintf(stderr, "Error: no input file specified\n");
+                    fprintf(stderr, "Error: invalid command\n");
                     exit(1);
                 }
             }
-            else { }
+            else 
+            { 
+                fprintf(stderr, "Error: invalid command\n");
+                exit(1);
+            }
         }
         else if (strcmp(tokens[i], ">") == 0)
         {
+            if (out_redirect != -1 || append_redirect != -1)
+            {
+                fprintf(stderr, "Error: invalid command\n");
+                exit(1);
+            }
             if (allow_output_redirection)
             {
                 out_redirect = i;
@@ -335,26 +337,39 @@ void process_commands(char **tokens, int pos, int cmd_num)
                     out = tokens[i + 1];
                 else
                 {
-                    fprintf(stderr, "Error: no output file initialized/specified\n");
+                    fprintf(stderr, "Error: invalid command\n");
                     exit(1);
                 }
             }
-            else { }
+            else 
+            {
+                fprintf(stderr, "Error: invalid command\n");
+                exit(1);
+            }
         }
         else if (strcmp(tokens[i], ">>") == 0)
         {
             if (allow_output_redirection)
             {
+                if (out_redirect != -1 || append_redirect != -1)
+                {
+                    fprintf(stderr, "Error: invalid command\n");
+                    exit(1);
+                }
                 append_redirect = i;
                 if (tokens[i + 1] != NULL)
                     out = tokens[i + 1];
                 else
                 {
-                    fprintf(stderr, "Error: no output file initialized/specified\n");
+                    fprintf(stderr, "Error: invalid command\n");
                     exit(1);
                 }
             }
-            else { }
+            else
+            {
+                fprintf(stderr, "Error: invalid command\n");
+                exit(1);
+            }
         }
     }
 
@@ -385,7 +400,7 @@ void process_commands(char **tokens, int pos, int cmd_num)
 
         if (file2 < 0)
         {
-            perror("error");
+            fprintf(stderr, "Error: invalid file\n");
             exit(1);
         }
 
@@ -393,7 +408,7 @@ void process_commands(char **tokens, int pos, int cmd_num)
         close(file2);
     }
 
-    // execvp answers
+    /** execute the answer */
     int len = get_tokens_length(tokens), index = 0, j = 0;
     char *commands[len];
     while (tokens[j] != NULL)
@@ -407,7 +422,7 @@ void process_commands(char **tokens, int pos, int cmd_num)
                 j++;
             else
             {
-                fprintf(stderr, "Error: no filename specified after %s\n", tokens[j - 1]);
+                fprintf(stderr, "Error: invalid command\n");
                 exit(1);
             }
         }
@@ -416,12 +431,30 @@ void process_commands(char **tokens, int pos, int cmd_num)
     }
     commands[index] = NULL;
 
-    int status_code = execvp(commands[0], commands);
-    // if execvp has return value, it means new program is not executed successfully
-    if (status_code == -1)
+    if (strchr(commands[0], '/') != NULL)
     {
-        fprintf(stderr, "Error: invalid program\n");
-        exit(1);
+        int status_code = execv(commands[0], commands);
+        // if execvp has return value, it means new program is not executed successfully
+        if (status_code == -1)
+        {
+            fprintf(stderr, "Error: invalid program\n");
+            exit(1);
+        }
+    }
+
+    if (strchr(commands[0], '/') == NULL)
+    {
+        // if not contains '/', then find program in "/usr/bin/.."
+        char concat_path[PATH_MAX];
+        strcpy(concat_path, "/usr/bin/");
+        strcat(concat_path, commands[0]);
+        
+        int status_code = execv(concat_path, commands);
+        if (status_code == -1)
+        {
+            fprintf(stderr, "Error: invalid program\n");
+            exit(1);
+        }
     }
 }
 
@@ -434,11 +467,28 @@ void handle_pipes(char **tokens, int cmd_num)
      * case 32 hint from discord: "For case 32, your shell should execute all programs in the pipeline concurrently, not sequentially"
      * @cite https://stackoverflow.com/questions/19461744/how-to-make-parent-wait-for-all-child-processes-to-finish
      */
+
     pid_t pid;
     int status, file = 0;
     int fd[2];
-
     int i, cmd_start = 0; // cmd_start marks index of the start of the current command in tokens
+    int error_flag = 0;
+
+    // check if the pipe syntax is valid
+    i = 0;
+    while (tokens[i] != NULL)
+    {
+        if (strcmp(tokens[i], "|") == 0)
+        {
+            if (i == 0 || tokens[i + 1] == NULL || strcmp(tokens[i + 1], "|") == 0)
+            {
+                fprintf(stderr, "Error: invalid command\n");
+                return;
+            }
+        }
+        i++;
+    }
+
     for (i = 0; i < cmd_num; i++) 
     {
         // build up commands for execvp
@@ -457,13 +507,10 @@ void handle_pipes(char **tokens, int cmd_num)
             cmd_start = j + 1;
 
         // create a pipe if not the last command
-        if (i < cmd_num - 1)
+        if (pipe(fd) == -1)
         {
-            if (pipe(fd) == -1)
-            {
-                perror("pipe");
-                exit(1);
-            }
+            fprintf(stderr, "Error: invalid command\n");
+            exit(1);
         }
 
         /** create process part */
@@ -515,7 +562,16 @@ void handle_pipes(char **tokens, int cmd_num)
                 close(fd[0]);
         }
     }
-    while ((pid = wait(&status)) > 0);
+    
+    // wait for all children processes
+    while ((pid = wait(&status)) > 0)
+    {
+        if (WIFEXITED(status))
+            error_flag = 1;
+    }
+
+    if (error_flag)
+        return;
 }
 
 int main()
@@ -560,17 +616,6 @@ int main()
                 fprintf(stderr, "Error: invalid command\n");
             else
             {
-                if (strcmp(tokens[1], "~") == 0)
-                {
-                    char *dir = getenv("HOME");
-                    if (dir == NULL)
-                    {
-                        perror("home");
-                        exit(1);
-                    }
-                    tokens[1] = dir;
-                }
-                // change directory
                 int dir_status = chdir(tokens[1]);
                 // if failed
                 if (dir_status != 0)
@@ -685,6 +730,7 @@ int main()
                 // add stopped job to the list if the process is stopped
                 if (WIFSTOPPED(status))
                     stp_process(pid);
+                
             }
         }
         free(tokens);
