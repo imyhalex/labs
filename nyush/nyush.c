@@ -35,7 +35,9 @@ typedef struct job
 int job_cnt = 0;
 job job_list[MAX_JOBS];
 char *current_command_line = NULL; // command container to hold currrent stopped job
-char *token = NULL; // basename container: constantly update the basename
+
+/** global variable for basename container: constantly update the basename */
+char *token = NULL;
 
 /**
  * global signal flag, ctrl-c key control
@@ -109,7 +111,6 @@ void print_prompt(char *token)
 
 void stp_process(pid_t pid)
 {
-    // this function will send a SIGTSTP signal to the process and create child process for that stopped process
     append_job(pid, current_command_line);
 }
 
@@ -317,21 +318,16 @@ void process_commands(char **tokens, int pos, int cmd_num)
                     exit(1);
                 }
             }
-            else 
-            { 
-                fprintf(stderr, "Error: invalid command\n");
-                exit(1);
-            }
         }
         else if (strcmp(tokens[i], ">") == 0)
         {
-            if (out_redirect != -1 || append_redirect != -1)
-            {
-                fprintf(stderr, "Error: invalid command\n");
-                exit(1);
-            }
             if (allow_output_redirection)
             {
+                if (out_redirect != -1 || append_redirect != -1)
+                {
+                    fprintf(stderr, "Error: invalid command\n");
+                    exit(1);
+                }
                 out_redirect = i;
                 if (tokens[i + 1] != NULL)
                     out = tokens[i + 1];
@@ -340,11 +336,6 @@ void process_commands(char **tokens, int pos, int cmd_num)
                     fprintf(stderr, "Error: invalid command\n");
                     exit(1);
                 }
-            }
-            else 
-            {
-                fprintf(stderr, "Error: invalid command\n");
-                exit(1);
             }
         }
         else if (strcmp(tokens[i], ">>") == 0)
@@ -364,11 +355,6 @@ void process_commands(char **tokens, int pos, int cmd_num)
                     fprintf(stderr, "Error: invalid command\n");
                     exit(1);
                 }
-            }
-            else
-            {
-                fprintf(stderr, "Error: invalid command\n");
-                exit(1);
             }
         }
     }
@@ -433,8 +419,9 @@ void process_commands(char **tokens, int pos, int cmd_num)
 
     if (strchr(commands[0], '/') != NULL)
     {
+        // if command contains /, execute directly
         int status_code = execv(commands[0], commands);
-        // if execvp has return value, it means new program is not executed successfully
+        // if execv has return value, it means new program is not executed successfully
         if (status_code == -1)
         {
             fprintf(stderr, "Error: invalid program\n");
@@ -566,12 +553,11 @@ void handle_pipes(char **tokens, int cmd_num)
     // wait for all children processes
     while ((pid = wait(&status)) > 0)
     {
-        if (WIFEXITED(status))
+        if (WIFEXITED(status)) 
             error_flag = 1;
     }
 
-    if (error_flag)
-        return;
+    if (error_flag) return;
 }
 
 int main()
