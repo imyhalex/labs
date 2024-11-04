@@ -11,7 +11,7 @@
 #include <string.h>
 #include <getopt.h>
 
-#define BUFFER_SIZE 16384 // define a 16KB buffer
+#define BUFFER_SIZE 32768 // define a 32KB buffer
 #define CHUNK_SIZE 4096
 #define MAX_FILES 100
 #define MAX_CHUNKS 250000
@@ -19,7 +19,6 @@
 /**
  * All milestone 2 borrowed ideas from:
  * @cite: https://github.com/mathewpan2/Multithreaded-RLE/blob/main/encode.c
- * useed 90% of structs and global variables
  * ideas of 'void parallel_rle(char **files, int num_files_input, int num_threads);' from multi-thread part in 'int main();'
  * ideas of 'void *fetch_task();' are from 'void* worker_encode();'
  */
@@ -57,13 +56,22 @@ int num_files = 0;
 // control variables
 int all_tasks_created = 0;
 
-// sequential variables
 int is_first_file = 1;
 unsigned char curr_c = 0;
 unsigned char buffer[BUFFER_SIZE];
 size_t buffer_index = 0;
 // 1-byte unsigned integer in binary format
 unsigned char count = 0;
+
+// helper function to reduce the number fwrite call
+void flush_buffer()
+{
+    if (buffer_index > 0)
+    {
+        fwrite(buffer, 1, buffer_index, stdout);
+        buffer_index = 0;
+    }
+}
 
 void init_queue(TaskQueue *queue)
 {
@@ -228,25 +236,27 @@ void parallel_rle(char **files, int num_files_input, int num_threads)
     pthread_cond_broadcast(&queue_cond);
     pthread_mutex_unlock(&queue_mutex);
 
-    // wait all threads
-    for (i = 0; i < num_threads; i++)
-        pthread_join(threads[i], NULL);
-
-    // merge boundary - sequential
+    // main thread processes results as they become avaibale
+    int total_tasks = chunk_idx;
+    int tasks_processed = 0;
+    int curent_task_index = 0;
     unsigned char last_char = 0;
     unsigned char last_count = 0;
     int has_last_run = 0; // flag to indicate if there's a pending run to merge
-    int j = 0;
-    for (j = 0; j < total_chunks; j++)
+    while (tasks_processed < total_tasks)
     {
-        // skip if empty
-        if (chunk_size_arr[j] < 2)
-            continue;
+        pthread_mutex_lock(&results_mutex);
+        while (!completed_arr[curent_task_index])
+            pthread_cond_wait(&results_cond, &results_mutex);
+        // process result at current task index
+        unsigned char *result = results[curent_task_index];
+        int result_size = chunk_size_arr[curent_task_index];
+        // merge
         int k;
-        for (k = 0; k < chunk_size_arr[j]; k+=2)
+        for (k = 0; k < result_size; k+=2)
         {
-            unsigned char current_char = results[j][k];
-            unsigned char current_count = results[j][k + 1];
+            unsigned char current_char = result[k];
+            unsigned char current_count = result[k + 1];
             if (has_last_run && current_char == last_char)
             {
                 unsigned int combined_count = (unsigned int)last_count + (unsigned int)current_count;
@@ -256,8 +266,10 @@ void parallel_rle(char **files, int num_files_input, int num_threads)
                 {
                     // write out the maximum allowed count
                     unsigned char overflow = (unsigned char)(combined_count - 255);
-                    fwrite(&last_char, 1, 1, stdout);
-                    fwrite(&last_count, 1, 1, stdout);
+                    buffer[buffer_index++] = last_char;
+                    buffer[buffer_index++] = 255;
+                    if (buffer_index >= BUFFER_SIZE - 2)
+                        flush_buffer();
                     last_count = overflow;
                 }
             }
@@ -265,21 +277,34 @@ void parallel_rle(char **files, int num_files_input, int num_threads)
             {
                 if (has_last_run)
                 {
-                    fwrite(&last_char, 1, 1, stdout);
-                    fwrite(&last_count, 1, 1, stdout);
+                    buffer[buffer_index++] = last_char;
+                    buffer[buffer_index++] = last_count;
+                    if (buffer_index >= BUFFER_SIZE - 2)
+                        flush_buffer();
                 }
                 last_char = current_char;
                 last_count = current_count;
                 has_last_run = 1;
             }
         }
+        free(result);
+        tasks_processed++;
+        curent_task_index++;
+        pthread_mutex_unlock(&results_mutex);
     }
 
     if (has_last_run)
     {
-        fwrite(&last_char, 1, 1, stdout);
-        fwrite(&last_count, 1, 1, stdout);
+        buffer[buffer_index++] = last_char;
+        buffer[buffer_index++] = last_count;
+        if (buffer_index >= BUFFER_SIZE - 2)
+            flush_buffer();
     }
+    flush_buffer();
+
+    // wait all threads
+    for (i = 0; i < num_threads; i++)
+        pthread_join(threads[i], NULL);
 
     // clean up
     free(queue.front);
@@ -295,16 +320,6 @@ void parallel_rle(char **files, int num_files_input, int num_threads)
 }
 
 /** this part for sequential rle */
-// helper function for sequential rle
-void flush_buffer()
-{
-    if (buffer_index > 0)
-    {
-        write(STDOUT_FILENO, buffer, buffer_index);
-        buffer_index = 0;
-    }
-}
-
 void encode_to_rle(char *data, size_t size)
 {
     unsigned char *ptr = (unsigned char *) data;
