@@ -94,51 +94,90 @@ void print_file_sys_info(FileSystemInfo *fs_info)
     printf("Number of reserved sectors = %u\n", fs_info->reserved_sector_count);
 }
 
+void trim_file(char *filename, DirEntry *dir_entry) 
+{
+    char name[9]; 
+    memcpy(name, dir_entry->DIR_Name, 8);
+    name[8] = '\0';
+
+    // Trim trailing spaces from the name
+    int i;
+    for (i = 7; i >= 0 && name[i] == ' '; i--)
+        name[i] = '\0';
+
+    char ext[4]; 
+    memcpy(ext, dir_entry->DIR_Name + 8, 3);
+    ext[3] = '\0';
+
+    int j;
+    for (j = 2; j >= 0 && ext[j] == ' '; j--)
+        ext[j] = '\0';
+
+    if (ext[0] != '\0')
+        sprintf(filename, "%s.%s", name, ext);
+    else
+        sprintf(filename, "%s", name);
+}
+
 void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
 {
-    DirEntry *dir_entry = (DirEntry *) (file_mem + fs_info->root_dir_offset);
+    unsigned int current_cluster = fs_info->root_cluster;
+    unsigned int cluster_size = fs_info->cluster_size;
+    unsigned int entries_per_cluster = cluster_size / sizeof(DirEntry);
+    unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
 
     int entries_cnt = 0;
-    while (1)
+
+    while (current_cluster >= 2 && current_cluster < 0x0FFFFFF8)
     {
-        if (dir_entry->DIR_Name[0] == 0x00)
-            break;
-        
-        if (dir_entry->DIR_Name[0] == 0xe5 || (dir_entry->DIR_Name[0] == 0x0f) )
+        unsigned int cluster_offset = fs_info->data_region_offset + (current_cluster - 2) * cluster_size;
+
+        DirEntry *dir_entry = (DirEntry *)(file_mem + cluster_offset);
+
+        unsigned int i;
+        for (i = 0; i < entries_per_cluster; i++)
         {
+            if (dir_entry->DIR_Name[0] == 0x00)
+                break;
+            
+
+            if (dir_entry->DIR_Name[0] == 0xE5 || dir_entry->DIR_Attr == 0x0F)
+            {
+                dir_entry++;
+                continue;
+            }
+
+            char filename[13];
+            trim_file(filename, dir_entry);
+
+            unsigned int starting_cluster = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
+
+            if (dir_entry->DIR_Attr & 0x10)
+                printf("%s/ (starting cluster = %u)\n", filename, starting_cluster);
+            else
+            {
+                unsigned int file_size = dir_entry->DIR_FileSize;
+                if (file_size > 0)
+                    printf("%s (size = %u, starting cluster = %u)\n", filename, file_size, starting_cluster);
+                else
+                    printf("%s (size = 0)\n", filename);
+            }
+
             entries_cnt++;
-            continue;
-        }
-        char filename[12];
-        memcpy(filename, dir_entry->DIR_Name, 11);
-        filename[11] = '\0';
-        
-        // trimming spaces
-        int i;
-        for (i = 10; i >= 0; i--)
-        {
-            if (filename[i] == ' ')
-                filename[i] = '\0';
-            else break;
+            dir_entry++;
         }
 
-        // get the starting cluster
-        unsigned int starting_cluster = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
-        // if dirctory:
-        if (dir_entry->DIR_Attr & 0x10)
-            printf("%s/ (starting cluster = %u)\n", filename, starting_cluster);
-        // files
-        else 
-        {
-            unsigned int file_size = dir_entry->DIR_FileSize;
-            if (file_size > 0)
-                printf("%s (size = %u, starting cluster = %u)\n", filename, file_size, starting_cluster);
-            else 
-                printf("%s (size = 0)\n", filename);     
-        }
-        entries_cnt++;
-        dir_entry++;
+        // get the next cluster in the chain from the FAT
+        unsigned int fat_entry_offset = fat_start + current_cluster * 4;
+        unsigned int *fat_entry = (unsigned int *)(file_mem + fat_entry_offset);
+        // mask to get 28 bits
+        current_cluster = *fat_entry & 0x0FFFFFFF; 
+
+        // check for end-of-cluster chain
+        if (current_cluster >= 0x0FFFFFF8)
+            break;
     }
+
     printf("Total number of entries = %d\n", entries_cnt);
 }
 
@@ -149,8 +188,59 @@ void recover_small_file(char *file_mem, char *filename, FileSystemInfo *fs_info)
     DirEntry *target_entry = NULL;
     while (1) 
     {
+        if (dir_entry->DIR_Name[0] == 0x00)
+            break;
         
+        if (dir_entry->DIR_Name[0] == 0xe5)
+        {
+            char entry_name[13];
+            trim_file(entry_name, dir_entry);
+            // replace the first character
+            entry_name[0] = filename[0];
+            if (strcasecmp(entry_name, filename) == 0)
+            {
+                found++;
+                if (found == 1)
+                    target_entry = dir_entry;
+                else 
+                {
+                    printf("%s: multiple candidates found\n", filename);
+                    return;
+                }
+            }
+        }
+        dir_entry++;
     }
+
+    if (found == 0)
+    {
+        printf("%s: file not found\n", filename);
+        return;
+    }
+
+    // perform file recovery
+    unsigned int starting_cluster = (target_entry->DIR_FstClusHI << 16) | target_entry->DIR_FstClusLO;
+    unsigned int fat_offset = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
+    unsigned int fat_entry_offset = fat_offset + starting_cluster * 4; // FAT32 entries are 4 bytes
+
+    // if empty file
+    if (starting_cluster == 0) 
+    {
+        target_entry->DIR_Name[0] = filename[0];
+        printf("%s: successfully recovered\n", filename);
+        return;
+    }
+
+    unsigned int *fat_entry = (unsigned int *) (file_mem + fat_entry_offset);
+    if (*fat_entry != 0x00000000)
+    {
+        printf("%s: cluster in use\n", filename);
+        return;
+    }
+
+    *fat_entry = 0x0ffffff8;
+    target_entry->DIR_Name[0] = filename[0];
+    printf("%s: successfully recovered\n", filename);
 }
 
 int main(int argc, char **argv) 
@@ -200,7 +290,7 @@ int main(int argc, char **argv)
     int fd = open(disk_image, O_RDWR); // Use O_RDWR because we may need to write
     if (fd < 0)
     {
-        perror("Error: open disk image");
+        display_info();
         exit(1);
     }
     if (fstat(fd, &sb) == -1)
