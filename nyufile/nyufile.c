@@ -62,6 +62,21 @@ typedef struct DirEntry {
 } DirEntry;
 #pragma pack(pop)
 
+typedef struct {
+    unsigned int bytes_per_sector;
+    unsigned int sectors_per_cluster;
+    unsigned int reserved_sector_count;
+    unsigned int num_fats;
+    unsigned int fat_size;
+    unsigned int root_cluster;
+    unsigned int fat_region_size;
+    unsigned int cluster_size;
+    unsigned int data_region_offset;
+    unsigned int root_dir_offset;
+    unsigned int total_sectors;
+    unsigned int total_clusters;
+} FileSystemInfo;
+
 void display_info() 
 {
     printf("Usage: ./nyufile disk <options>\n");
@@ -71,36 +86,17 @@ void display_info()
     printf("  -R filename -s sha1    Recover a possibly non-contiguous file.\n");
 }
 
-void print_file_sys_info(void *file_mem)
+void print_file_sys_info(FileSystemInfo *fs_info)
 {
-    BootEntry *entry = (BootEntry *)file_mem;
-    unsigned char fats_num = entry->BPB_NumFATs;
-    unsigned short num_bytes_per_sector = entry->BPB_BytsPerSec;
-    unsigned char sectors_per_cluster = entry->BPB_SecPerClus;
-    unsigned short reserved_sectors = entry->BPB_RsvdSecCnt;
-
-    printf("Number of FATs = %u\n", fats_num);
-    printf("Number of bytes per sector = %u\n", num_bytes_per_sector);
-    printf("Number of sectors per cluster = %u\n", sectors_per_cluster);
-    printf("Number of reserved sectors = %u\n", reserved_sectors);
+    printf("Number of FATs = %u\n", fs_info->num_fats);
+    printf("Number of bytes per sector = %u\n", fs_info->bytes_per_sector);
+    printf("Number of sectors per cluster = %u\n", fs_info->sectors_per_cluster);
+    printf("Number of reserved sectors = %u\n", fs_info->reserved_sector_count);
 }
 
-void display_root_directory(void *file_mem)
+void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
 {
-    BootEntry *entry = (BootEntry *) file_mem;
-    unsigned int bytes_per_sector = entry->BPB_BytsPerSec;
-    unsigned int sectors_per_cluster = entry->BPB_SecPerClus;
-    unsigned int reserved_sector_count = entry->BPB_RsvdSecCnt;
-    unsigned int num_fats = entry->BPB_NumFATs;
-    unsigned int fat_size = entry->BPB_FATSz32;
-    unsigned int root_cluster = entry->BPB_RootClus;
-
-    // offset and sizes calculation
-    unsigned int fat_region_size = fat_size * num_fats * bytes_per_sector;
-    unsigned int cluster_size = bytes_per_sector * sectors_per_cluster;
-    unsigned int data_region_offset = (reserved_sector_count * bytes_per_sector) + fat_region_size;
-    unsigned int root_dir_offset = data_region_offset + ((root_cluster - 2)) * cluster_size;
-    DirEntry *dir_entry = (DirEntry *) (file_mem + root_dir_offset);
+    DirEntry *dir_entry = (DirEntry *) (file_mem + fs_info->root_dir_offset);
 
     int entries_cnt = 0;
     while (1)
@@ -146,7 +142,16 @@ void display_root_directory(void *file_mem)
     printf("Total number of entries = %d\n", entries_cnt);
 }
 
-
+void recover_small_file(char *file_mem, char *filename, FileSystemInfo *fs_info)
+{
+    DirEntry *dir_entry = (DirEntry *) (file_mem + fs_info->root_dir_offset);
+    int found = 0;
+    DirEntry *target_entry = NULL;
+    while (1) 
+    {
+        
+    }
+}
 
 int main(int argc, char **argv) 
 {
@@ -191,7 +196,7 @@ int main(int argc, char **argv)
     }
     
     struct stat sb;
-    void *file_mem;
+    char *file_mem;
     int fd = open(disk_image, O_RDWR); // Use O_RDWR because we may need to write
     if (fd < 0)
     {
@@ -213,13 +218,31 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    // initialize file system info
+    FileSystemInfo fs_info;
+    BootEntry *entry = (BootEntry *) file_mem;
+    fs_info.bytes_per_sector = entry->BPB_BytsPerSec;
+    fs_info.sectors_per_cluster = entry->BPB_SecPerClus;
+    fs_info.reserved_sector_count = entry->BPB_RsvdSecCnt;
+    fs_info.num_fats = entry->BPB_NumFATs;
+    fs_info.fat_size = entry->BPB_FATSz32;
+    fs_info.root_cluster = entry->BPB_RootClus;
+    fs_info.total_sectors = entry->BPB_TotSec32;
+
+    // calculate derived values
+    fs_info.fat_region_size = fs_info.fat_size * fs_info.num_fats * fs_info.bytes_per_sector;
+    fs_info.cluster_size = fs_info.bytes_per_sector * fs_info.sectors_per_cluster;
+    fs_info.data_region_offset = (fs_info.reserved_sector_count * fs_info.bytes_per_sector) + fs_info.fat_region_size;
+    fs_info.root_dir_offset = fs_info.data_region_offset + ((fs_info.root_cluster - 2) * fs_info.cluster_size);
+    fs_info.total_clusters = (fs_info.total_sectors - fs_info.reserved_sector_count - (fs_info.num_fats * fs_info.fat_size)) / fs_info.sectors_per_cluster;
+
     // proceed based on the option used
     if (i_flag) 
-        print_file_sys_info(file_mem);
+        print_file_sys_info(&fs_info);
     else if (l_flag)
-        display_root_directory(file_mem);
+        display_root_directory(file_mem, &fs_info);
     else if (r_flag)
-        return 0;
+        recover_small_file(file_mem, filename, &fs_info);
 
     return 0;
 }
