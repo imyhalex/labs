@@ -1,4 +1,6 @@
+
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -128,7 +130,7 @@ void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
 
     int entries_cnt = 0;
 
-    while (current_cluster >= 2 && current_cluster < 0x0FFFFFF8)
+    while (current_cluster >= 2 && current_cluster < 0x0ffffff8)
     {
         unsigned int cluster_offset = fs_info->data_region_offset + (current_cluster - 2) * cluster_size;
 
@@ -141,7 +143,7 @@ void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
                 break;
             
 
-            if (dir_entry->DIR_Name[0] == 0xE5 || dir_entry->DIR_Attr == 0x0F)
+            if (dir_entry->DIR_Name[0] == 0xe5 || dir_entry->DIR_Attr == 0x0f)
             {
                 dir_entry++;
                 continue;
@@ -171,76 +173,309 @@ void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
         unsigned int fat_entry_offset = fat_start + current_cluster * 4;
         unsigned int *fat_entry = (unsigned int *)(file_mem + fat_entry_offset);
         // mask to get 28 bits
-        current_cluster = *fat_entry & 0x0FFFFFFF; 
+        current_cluster = *fat_entry & 0x0fffffff;
 
         // check for end-of-cluster chain
-        if (current_cluster >= 0x0FFFFFF8)
+        if (current_cluster >= 0x0ffffff8)
             break;
     }
 
     printf("Total number of entries = %d\n", entries_cnt);
 }
 
-void recover_small_file(char *file_mem, char *filename, FileSystemInfo *fs_info)
+int is_valid_cluster(unsigned int cluster) 
 {
-    DirEntry *dir_entry = (DirEntry *) (file_mem + fs_info->root_dir_offset);
-    int found = 0;
-    DirEntry *target_entry = NULL;
-    while (1) 
+    return cluster >= 2 && cluster < 0x0ffffff8;
+}
+
+unsigned char *read_file_data(char *file_mem, FileSystemInfo *fs_info, unsigned int starting_cluster, unsigned int file_size)
+{
+    unsigned char *data = malloc(file_size);
+    unsigned int cluster_size = fs_info->cluster_size;
+    unsigned int bytes_read = 0;
+    unsigned int current_cluster = starting_cluster;
+
+    while (bytes_read < file_size && is_valid_cluster(current_cluster))
     {
-        if (dir_entry->DIR_Name[0] == 0x00)
-            break;
-        
-        if (dir_entry->DIR_Name[0] == 0xe5)
+        unsigned int offset = fs_info->data_region_offset + (current_cluster - 2) * cluster_size;
+        unsigned int to_read = (file_size - bytes_read > cluster_size) ? cluster_size : file_size - bytes_read;
+        memcpy(data + bytes_read, file_mem + offset, to_read);
+        bytes_read += to_read;
+        current_cluster++;
+    }
+
+    if (bytes_read != file_size)
+    {
+        free(data);
+        return NULL;
+    }
+    return data;
+}
+
+int is_cluster_free(char *file_mem, FileSystemInfo *fs_info, unsigned int cluster)
+{
+    unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
+    unsigned int fat;
+    for (fat = 0; fat < fs_info->num_fats; fat++)
+    {
+        unsigned int fat_offset = fat_start + fat * fs_info->fat_size * fs_info->bytes_per_sector + cluster * 4;
+        unsigned int *fat_entry = (unsigned int *)(file_mem + fat_offset);
+        if (*fat_entry != 0x00000000)
+            return 0;
+    }
+    return 1;
+}
+
+void update_fat_entry(char *file_mem, FileSystemInfo *fs_info, unsigned int cluster, unsigned int value)
+{
+    unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
+    unsigned int fat;
+    for (fat = 0; fat < fs_info->num_fats; fat++) 
+    {
+        unsigned int fat_offset = fat_start + fat * fs_info->fat_size * fs_info->bytes_per_sector + cluster * 4;
+        unsigned int *fat_entry = (unsigned int *)(file_mem + fat_offset);
+        *fat_entry = value;
+    }
+}
+
+DirEntry *get_cluster_entries(char *file_mem, FileSystemInfo *fs_info, unsigned int cluster)
+{
+    unsigned int offset = fs_info->data_region_offset + (cluster - 2) * fs_info->cluster_size;
+    return (DirEntry *)(file_mem + offset);
+}
+
+int is_matching_entry(DirEntry *dir_entry, char *filename)
+{
+    char temp_name[11];
+    memcpy(temp_name, dir_entry->DIR_Name, 11);
+    temp_name[0] = filename[0];
+    DirEntry temp_entry = *dir_entry;
+    memcpy(temp_entry.DIR_Name, temp_name, 11);
+    char entry_name[13];
+    trim_file(entry_name, &temp_entry);
+    return strcasecmp(entry_name, filename) == 0;
+}
+
+unsigned int get_next_cluster(char *file_mem, FileSystemInfo *fs_info, unsigned int current_cluster)
+{
+    unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
+    unsigned int fat_entry_offset = fat_start + current_cluster * 4;
+    unsigned int *fat_entry = (unsigned int *)(file_mem + fat_entry_offset);
+    return *fat_entry & 0x0fffffff;
+}
+
+int hex_to_bytes(const char *hex_str, unsigned char *byte_arr)
+{
+    int i;
+    for (i = 0; i < SHA_DIGEST_LENGTH; i++)
+    {
+        if (sscanf(hex_str + 2 * i, "%2hhx", &byte_arr[i]) != 1)
+            return 0;
+    }
+    return 1;
+}
+
+DirEntry *find_target_entry(char *file_mem, FileSystemInfo *fs_info, DirEntry **candidates, int candidate_count, char *sha1_hash)
+{
+    if (!sha1_hash)
+        return candidates[0];
+    unsigned char target_hash[SHA_DIGEST_LENGTH];
+    if (!hex_to_bytes(sha1_hash, target_hash))
+        return NULL;
+    int i;
+    for (i = 0; i < candidate_count; i++)
+    {
+        DirEntry *entry = candidates[i];
+        unsigned int starting_cluster = (entry->DIR_FstClusHI << 16) | entry->DIR_FstClusLO;
+        unsigned int file_size = entry->DIR_FileSize;
+        unsigned char *file_data = read_file_data(file_mem, fs_info, starting_cluster, file_size);
+        if (!file_data)
+            continue;
+        unsigned char computed_hash[SHA_DIGEST_LENGTH];
+        SHA1(file_data, file_size, computed_hash);
+        free(file_data);
+        if (memcmp(computed_hash, target_hash, SHA_DIGEST_LENGTH) == 0)
+            return entry;
+    }
+    return NULL;
+}
+
+int recover_clusters(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry)
+{
+    unsigned int starting_cluster = (entry->DIR_FstClusHI << 16) | entry->DIR_FstClusLO;
+    unsigned int file_size = entry->DIR_FileSize;
+    if (starting_cluster == 0)
+        return 1;
+
+    unsigned int cluster_size = starting_cluster;
+    unsigned int cluster_needed = (file_size + cluster_size - 1) / cluster_size;
+    unsigned int current_cluster = starting_cluster;
+    unsigned int i;
+    for (i = 0; i < cluster_needed; i++) 
+    {
+        if (!is_valid_cluster(current_cluster))
+            return 0;
+        if (!is_cluster_free(file_mem, fs_info, current_cluster))
+            return 0;
+        unsigned int next_cluster = (i == cluster_needed - 1) ? 0x0FFFFFF8 : current_cluster + 1;
+        update_fat_entry(file_mem, fs_info, current_cluster, next_cluster);
+        current_cluster = next_cluster;
+    }
+    return 1;
+}
+
+void update_fat_sequence(char *file_mem, FileSystemInfo *fs_info, unsigned int *sequence, int seq_len)
+{
+    unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
+    int i;
+    for (i = 0; i < seq_len; i++)
+    {
+        unsigned int cluster = sequence[i];
+        unsigned int next_cluster = (i == seq_len - 1) ? 0x0FFFFFF8 : sequence[i + 1];
+        unsigned int fat;
+        for (fat = 0; fat < fs_info->num_fats; fat++) 
         {
-            char entry_name[13];
-            trim_file(entry_name, dir_entry);
-            // replace the first character
-            entry_name[0] = filename[0];
-            if (strcasecmp(entry_name, filename) == 0)
+            unsigned int fat_offset = fat_start + fat * fs_info->fat_size * fs_info->bytes_per_sector + cluster * 4;
+            unsigned int *fat_entry = (unsigned int *)(file_mem + fat_offset);
+            *fat_entry = next_cluster;
+        }
+    }
+}
+
+void get_unallocated_clusters(char *file_mem, FileSystemInfo *fs_info, unsigned int *clusters, int *num_clusters)
+{
+    unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
+    int count = 0;
+    unsigned int cluster;
+    for (cluster = 2; cluster <= 21; cluster++) 
+    {
+        unsigned int fat_offset = fat_start + cluster * 4;
+        unsigned int *fat_entry = (unsigned int *)(file_mem + fat_offset);
+        if (*fat_entry == 0x00000000)
+            clusters[count++] = cluster;
+    }
+    *num_clusters = count;
+}
+
+int check_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash, unsigned int *sequence, int seq_len)
+{
+    unsigned int file_size = entry->DIR_FileSize;
+    unsigned int cluster_size = fs_info->cluster_size;
+    unsigned char *data = malloc(file_size);
+    unsigned int bytes_read = 0;
+    int i;
+    for (i = 0; i < seq_len; i++)
+    {
+        unsigned int cluster = sequence[i];
+        unsigned int offset = fs_info->data_region_offset + (cluster - 2) * cluster_size;
+        unsigned int to_read = (file_size - bytes_read > cluster_size) ? cluster_size : (file_size - bytes_read);
+        memcpy(data + bytes_read, file_mem + offset, to_read);
+        bytes_read += to_read;
+    }
+    unsigned char computed_hash[SHA_DIGEST_LENGTH];
+    SHA1(data, file_size, computed_hash);
+    free(data);
+    return memcmp(computed_hash, target_hash, SHA_DIGEST_LENGTH) == 0;
+}
+
+int find_matching_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry,
+                             unsigned char *target_hash, unsigned int *clusters, int num_clusters, int clusters_needed)
+{
+    unsigned int total_permutation = pow(num_clusters, clusters_needed);
+    unsigned int *sequence = malloc(sizeof(unsigned int) * clusters_needed);
+    unsigned int perm;
+    for (perm = 0; perm < total_permutation; perm++)
+    {
+        unsigned int temp = perm;
+        int i;
+        for (i = 0; i < clusters_needed; i++)
+        {
+            sequence[i] = clusters[temp % num_clusters];
+            temp /= num_clusters;
+        }
+        if (check_sequence(file_mem, fs_info, entry, target_hash, sequence, clusters_needed))
+        {
+            update_fat_sequence(file_mem, fs_info, sequence, clusters_needed);
+            free(sequence);
+            return 1;
+        }
+    }
+    free(sequence);
+    return 0;
+}
+
+void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char *sha1_hash, int is_not_contiguous)
+{
+    unsigned int cluster_size = fs_info->cluster_size;
+    unsigned int entries_per_cluster = cluster_size / sizeof(DirEntry);
+    unsigned int root_cluster = fs_info->root_cluster;
+
+    DirEntry *candidates[100];
+    int candidate_count = 0;
+
+    unsigned int current_cluster = root_cluster;
+    while (is_valid_cluster(current_cluster))
+    {
+        DirEntry *dir_entry = get_cluster_entries(file_mem, fs_info, current_cluster);
+
+        for (unsigned int i = 0; i < entries_per_cluster; i++, dir_entry++)
+        {
+            if (dir_entry->DIR_Name[0] == 0x00)
+                break;
+
+            if (dir_entry->DIR_Name[0] == 0xe5 && !(dir_entry->DIR_Attr & 0x0f))
             {
-                found++;
-                if (found == 1)
-                    target_entry = dir_entry;
-                else 
+                if (is_matching_entry(dir_entry, filename))
                 {
-                    printf("%s: multiple candidates found\n", filename);
-                    return;
+                    if (candidate_count < 100)
+                        candidates[candidate_count++] = dir_entry;
+                    else return;
                 }
             }
         }
-        dir_entry++;
+
+        current_cluster = get_next_cluster(file_mem, fs_info, current_cluster);
     }
 
-    if (found == 0)
+    if (candidate_count == 0)
     {
         printf("%s: file not found\n", filename);
         return;
     }
 
-    // perform file recovery
-    unsigned int starting_cluster = (target_entry->DIR_FstClusHI << 16) | target_entry->DIR_FstClusLO;
-    unsigned int fat_offset = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
-    unsigned int fat_entry_offset = fat_offset + starting_cluster * 4; // FAT32 entries are 4 bytes
-
-    // if empty file
-    if (starting_cluster == 0) 
+    if (candidate_count > 1 && !sha1_hash)
     {
-        target_entry->DIR_Name[0] = filename[0];
-        printf("%s: successfully recovered\n", filename);
+        printf("%s: multiple candidates found\n", filename);
         return;
     }
 
-    unsigned int *fat_entry = (unsigned int *) (file_mem + fat_entry_offset);
-    if (*fat_entry != 0x00000000)
+    DirEntry *target_entry = find_target_entry(file_mem, fs_info, candidates, candidate_count, sha1_hash);
+    if (!target_entry)
     {
-        printf("%s: cluster in use\n", filename);
+        printf("%s: file not found\n", filename);
         return;
     }
 
-    *fat_entry = 0x0ffffff8;
+    if (is_not_contiguous)
+    {
+        unsigned int clusters[20];
+        int num_clusters;
+        get_unallocated_clusters(file_mem, fs_info, clusters, &num_clusters);
+        unsigned char target_hash[SHA_DIGEST_LENGTH];
+        hex_to_bytes(sha1_hash, target_hash);
+        int clusters_needed = (target_entry->DIR_FileSize + fs_info->cluster_size - 1) / fs_info->cluster_size;
+        if (clusters_needed > 5) clusters_needed = 5;
+        find_matching_sequence(file_mem, fs_info, target_entry, target_hash, clusters, num_clusters, clusters_needed);
+    }
+    else
+        recover_clusters(file_mem, fs_info, target_entry);
+    // restore the first character of the directory entry
     target_entry->DIR_Name[0] = filename[0];
-    printf("%s: successfully recovered\n", filename);
+    // success message
+    if (sha1_hash)
+        printf("%s: successfully recovered with SHA-1\n", filename);
+    else
+        printf("%s: successfully recovered\n", filename);
 }
 
 int main(int argc, char **argv) 
@@ -267,7 +502,7 @@ int main(int argc, char **argv)
             case 's': s_flag = 1; sha1_hash = optarg; break;
             default:
                 display_info();
-                exit(EXIT_FAILURE);
+                exit(1);
         }
     }
 
@@ -287,7 +522,7 @@ int main(int argc, char **argv)
     
     struct stat sb;
     char *file_mem;
-    int fd = open(disk_image, O_RDWR); // Use O_RDWR because we may need to write
+    int fd = open(disk_image, O_RDWR);
     if (fd < 0)
     {
         display_info();
@@ -331,8 +566,8 @@ int main(int argc, char **argv)
         print_file_sys_info(&fs_info);
     else if (l_flag)
         display_root_directory(file_mem, &fs_info);
-    else if (r_flag)
-        recover_small_file(file_mem, filename, &fs_info);
+    else if (r_flag || R_flag)
+        recover_file(file_mem, filename, &fs_info, s_flag? sha1_hash : NULL, R_flag);
 
     return 0;
 }
