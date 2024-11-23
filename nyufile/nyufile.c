@@ -71,6 +71,81 @@ void display_info()
     printf("  -R filename -s sha1    Recover a possibly non-contiguous file.\n");
 }
 
+void print_file_sys_info(void *file_mem)
+{
+    BootEntry *entry = (BootEntry *)file_mem;
+    unsigned char fats_num = entry->BPB_NumFATs;
+    unsigned short num_bytes_per_sector = entry->BPB_BytsPerSec;
+    unsigned char sectors_per_cluster = entry->BPB_SecPerClus;
+    unsigned short reserved_sectors = entry->BPB_RsvdSecCnt;
+
+    printf("Number of FATs = %u\n", fats_num);
+    printf("Number of bytes per sector = %u\n", num_bytes_per_sector);
+    printf("Number of sectors per cluster = %u\n", sectors_per_cluster);
+    printf("Number of reserved sectors = %u\n", reserved_sectors);
+}
+
+void display_root_directory(void *file_mem)
+{
+    BootEntry *entry = (BootEntry *) file_mem;
+    unsigned int bytes_per_sector = entry->BPB_BytsPerSec;
+    unsigned int sectors_per_cluster = entry->BPB_SecPerClus;
+    unsigned int reserved_sector_count = entry->BPB_RsvdSecCnt;
+    unsigned int num_fats = entry->BPB_NumFATs;
+    unsigned int fat_size = entry->BPB_FATSz32;
+    unsigned int root_cluster = entry->BPB_RootClus;
+
+    // offset and sizes calculation
+    unsigned int fat_region_size = fat_size * num_fats * bytes_per_sector;
+    unsigned int cluster_size = bytes_per_sector * sectors_per_cluster;
+    unsigned int data_region_offset = (reserved_sector_count * bytes_per_sector) + fat_region_size;
+    unsigned int root_dir_offset = data_region_offset + ((root_cluster - 2)) * cluster_size;
+    DirEntry *dir_entry = (DirEntry *) (file_mem + root_dir_offset);
+
+    int entries_cnt = 0;
+    while (1)
+    {
+        if (dir_entry->DIR_Name[0] == 0x00)
+            break;
+        
+        if (dir_entry->DIR_Name[0] == 0xe5 || (dir_entry->DIR_Name[0] == 0x0f) )
+        {
+            entries_cnt++;
+            continue;
+        }
+        char filename[12];
+        memcpy(filename, dir_entry->DIR_Name, 11);
+        filename[11] = '\0';
+        
+        // trimming spaces
+        int i;
+        for (i = 10; i >= 0; i--)
+        {
+            if (filename[i] == ' ')
+                filename[i] = '\0';
+            else break;
+        }
+
+        // get the starting cluster
+        unsigned int starting_cluster = (dir_entry->DIR_FstClusHI << 16) | dir_entry->DIR_FstClusLO;
+        // if dirctory:
+        if (dir_entry->DIR_Attr & 0x10)
+            printf("%s/ (starting cluster = %u)\n", filename, starting_cluster);
+        // files
+        else 
+        {
+            unsigned int file_size = dir_entry->DIR_FileSize;
+            if (file_size > 0)
+                printf("%s (size = %u, starting cluster = %u)\n", filename, file_size, starting_cluster);
+            else 
+                printf("%s (size = 0)\n", filename);     
+        }
+        entries_cnt++;
+        dir_entry++;
+    }
+    printf("Total number of entries = %d\n", entries_cnt);
+}
+
 
 
 int main(int argc, char **argv) 
@@ -86,7 +161,7 @@ int main(int argc, char **argv)
     char *filename = NULL;
     char *sha1_hash = NULL;
     int opt;
-    while (opt = getopt(argc, argv, "ilr:R:s:") != -1) 
+    while ((opt = getopt(argc, argv, "ilr:R:s:")) != -1) 
     {
         switch (opt) 
         {
@@ -114,11 +189,37 @@ int main(int argc, char **argv)
         display_info();
         exit(1);
     }
+    
+    struct stat sb;
+    void *file_mem;
+    int fd = open(disk_image, O_RDWR); // Use O_RDWR because we may need to write
+    if (fd < 0)
+    {
+        perror("Error: open disk image");
+        exit(1);
+    }
+    if (fstat(fd, &sb) == -1)
+    {
+        perror("Error: getting file size");
+        close(fd);
+        exit(1);
+    }
+
+    file_mem = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (file_mem == MAP_FAILED)
+    {
+        perror("Error: mapping file");
+        close(fd);
+        exit(1);
+    }
 
     // proceed based on the option used
-
-    // milestone 2
-    if (i_flag) return 0;
+    if (i_flag) 
+        print_file_sys_info(file_mem);
+    else if (l_flag)
+        display_root_directory(file_mem);
+    else if (r_flag)
+        return 0;
 
     return 0;
 }
