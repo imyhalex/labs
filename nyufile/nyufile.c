@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
@@ -307,7 +306,7 @@ int recover_clusters(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry)
     if (starting_cluster == 0)
         return 1;
 
-    unsigned int cluster_size = starting_cluster;
+    unsigned int cluster_size = fs_info->cluster_size;
     unsigned int cluster_needed = (file_size + cluster_size - 1) / cluster_size;
     unsigned int current_cluster = starting_cluster;
     unsigned int i;
@@ -378,30 +377,43 @@ int check_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, uns
     return memcmp(computed_hash, target_hash, SHA_DIGEST_LENGTH) == 0;
 }
 
+int search_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash, unsigned int *clusters, 
+                        int num_clusters, int clusters_needed, unsigned int *current_sequence, int depth, int *used)
+{
+    if (depth == clusters_needed)
+    {
+        if (check_sequence(file_mem, fs_info, entry, target_hash, current_sequence, clusters_needed))
+        {
+            update_fat_sequence(file_mem, fs_info, current_sequence, clusters_needed);
+            return 1;
+        }
+        return 0;
+    }
+    int i;
+    for (i = 0; i < num_clusters; i++)
+    {
+        if (!used[i])
+        {
+            used[i] = 1;
+            current_sequence[depth] = clusters[i];
+            if (search_sequence(file_mem, fs_info, entry, target_hash, clusters, num_clusters, clusters_needed,
+                               current_sequence, depth + 1, used))
+                return 1;
+            used[i] = 0;
+        }
+    }
+    return 0;
+}
+
 int find_matching_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry,
                              unsigned char *target_hash, unsigned int *clusters, int num_clusters, int clusters_needed)
 {
-    unsigned int total_permutation = pow(num_clusters, clusters_needed);
     unsigned int *sequence = malloc(sizeof(unsigned int) * clusters_needed);
-    unsigned int perm;
-    for (perm = 0; perm < total_permutation; perm++)
-    {
-        unsigned int temp = perm;
-        int i;
-        for (i = 0; i < clusters_needed; i++)
-        {
-            sequence[i] = clusters[temp % num_clusters];
-            temp /= num_clusters;
-        }
-        if (check_sequence(file_mem, fs_info, entry, target_hash, sequence, clusters_needed))
-        {
-            update_fat_sequence(file_mem, fs_info, sequence, clusters_needed);
-            free(sequence);
-            return 1;
-        }
-    }
+    int *used = calloc(num_clusters, sizeof(int));
+    int result = search_sequence(file_mem, fs_info, entry, target_hash, clusters, num_clusters, clusters_needed, sequence, 0, used);
     free(sequence);
-    return 0;
+    free(used);
+    return result;
 }
 
 void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char *sha1_hash, int is_not_contiguous)
@@ -464,7 +476,8 @@ void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char 
         unsigned char target_hash[SHA_DIGEST_LENGTH];
         hex_to_bytes(sha1_hash, target_hash);
         int clusters_needed = (target_entry->DIR_FileSize + fs_info->cluster_size - 1) / fs_info->cluster_size;
-        if (clusters_needed > 5) clusters_needed = 5;
+        if (clusters_needed > 5) 
+            clusters_needed = 5;
         find_matching_sequence(file_mem, fs_info, target_entry, target_hash, clusters, num_clusters, clusters_needed);
     }
     else
@@ -477,6 +490,7 @@ void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char 
     else
         printf("%s: successfully recovered\n", filename);
 }
+
 
 int main(int argc, char **argv) 
 {
@@ -561,13 +575,16 @@ int main(int argc, char **argv)
     fs_info.root_dir_offset = fs_info.data_region_offset + ((fs_info.root_cluster - 2) * fs_info.cluster_size);
     fs_info.total_clusters = (fs_info.total_sectors - fs_info.reserved_sector_count - (fs_info.num_fats * fs_info.fat_size)) / fs_info.sectors_per_cluster;
 
+    int is_not_contiguous = 0;
+    if (R_flag)
+        is_not_contiguous = 1;
     // proceed based on the option used
     if (i_flag) 
         print_file_sys_info(&fs_info);
     else if (l_flag)
         display_root_directory(file_mem, &fs_info);
     else if (r_flag || R_flag)
-        recover_file(file_mem, filename, &fs_info, s_flag? sha1_hash : NULL, R_flag);
+        recover_file(file_mem, filename, &fs_info, s_flag? sha1_hash : NULL, is_not_contiguous);
 
     return 0;
 }
