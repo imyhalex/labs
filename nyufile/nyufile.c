@@ -349,7 +349,8 @@ void get_unallocated_clusters(char *file_mem, FileSystemInfo *fs_info, unsigned 
     *num_clusters = count;
 }
 
-int check_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash, unsigned int *sequence, int seq_len)
+int check_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, 
+                    unsigned char *target_hash, unsigned int *sequence, int seq_len)
 {
     unsigned int file_size = entry->DIR_FileSize;
     unsigned int cluster_size = fs_info->cluster_size;
@@ -484,12 +485,12 @@ void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char 
             int result = find_matching_sequence(file_mem, fs_info, target_entry, target_hash, clusters, num_clusters, clusters_needed, &first_cluster);
             if (result == 1)
             {
-                // Update the starting cluster in the directory entry
-                target_entry->DIR_FstClusHI = (first_cluster >> 16) & 0xFFFF;
-                target_entry->DIR_FstClusLO = first_cluster & 0xFFFF;
-                // Restore the first character of the directory entry
+                // update the starting cluster in the directory entry
+                target_entry->DIR_FstClusHI = (first_cluster >> 16) & 0xffff;
+                target_entry->DIR_FstClusLO = first_cluster & 0xffff;
+                // restore the first character of the directory entry
                 target_entry->DIR_Name[0] = filename[0];
-                // Success message
+                // success message
                 printf("%s: successfully recovered with SHA-1\n", filename);
                 recovered = 1;
                 break;
@@ -518,7 +519,6 @@ void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char 
             printf("%s: successfully recovered\n", filename);
     } 
 }
-
 
 int main(int argc, char **argv) 
 {
