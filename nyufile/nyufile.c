@@ -62,6 +62,32 @@ typedef struct DirEntry {
 } DirEntry;
 #pragma pack(pop)
 
+/**
+ * References:
+ * @cite: https://www.pjrc.com/tech/8051/ide/fat32.html
+ * @cite: https://en.wikipedia.org/wiki/Design_of_the_FAT_file_system
+ * @cite: https://www.freecodecamp.org/news/brute-force-algorithms-explained/
+ * @cite: https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification
+ * @cite: https://medium.com/@benkaddourmed54/how-desperate-is-the-brute-force-algorithm-01a2da0951d8
+ */
+
+/**
+ * Acknowledgement:
+ * I did some Q&A with ChatGPT to reclarify the strcture of FAT and directory entries:
+ * - chat history: https://chatgpt.com/share/674de961-6424-8003-b747-7ff00e5e2a2b
+ * 
+ * I did a Q&A with ChatGPT to get to konw how to get the next cluster:
+ * - chat history: https://chatgpt.com/share/674deb3b-7120-8003-9f35-14b0ab7a3bba
+ * 
+ * I did Q&As in:
+ * - In FAT32, what varibales are necessary for listing root directory? How to locate it?
+ * - This variable looks ugly, can I extract some important varibales to get a new struct, also with some new variable in aggregation?
+ * - Can you explain how to traverse directory entries in the root directory of a FAT32 file system?
+ * - Can you give me some ideas about mileston 8? Tell me the steps how to solve this problem..
+ * - Can you give me a full psudo code and potential helper functions might neeeded for milestone 8? (I have no idea how to solve this by myself...)
+ * - chat history: https://chatgpt.com/share/674ffbfe-0bec-8003-b65e-5f79f25feb81
+ */
+
 typedef struct {
     unsigned int bytes_per_sector;
     unsigned int sectors_per_cluster;
@@ -118,19 +144,43 @@ void trim_file(char *filename, DirEntry *dir_entry)
         sprintf(filename, "%s", name);
 }
 
+// helper function
 int is_valid_cluster(unsigned int cluster) 
 {
     return cluster >= 2 && cluster < 0x0ffffff8;
 }
 
+// helper function
 unsigned int get_next_cluster(char *file_mem, FileSystemInfo *fs_info, unsigned int current_cluster)
 {
     unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
     unsigned int fat_entry_offset = fat_start + current_cluster * 4;
-    unsigned int *fat_entry = (unsigned int *)(file_mem + fat_entry_offset);
-    return *fat_entry & 0x0fffffff;
+    unsigned int fat_entry;
+    memcpy(&fat_entry, file_mem + fat_entry_offset, sizeof(fat_entry));
+    return fat_entry & 0x0FFFFFFF;
 }
 
+/**
+ * This function derives from the pseudo from ChatGPT:
+ * while (CurrentCluster < 0x0FFFFFF8):
+    CurrentSector = (CurrentCluster - 2) * BPB_SecPerClus + FirstDataSector
+    clusterData = read_sectors(CurrentSector, BPB_SecPerClus)
+    
+    for each 32-byte entry in clusterData:
+        if entry is LFN:
+            collect LFN parts
+        elif entry is standard:
+            if preceding LFN entries exist:
+                name = reconstructed LFN
+            else:
+                name = extract 8.3 name
+            display or process 'name'
+    
+    nextCluster = read_FAT_entry(CurrentCluster)
+    if nextCluster >= 0x0FFFFFF8:
+        break
+    CurrentCluster = nextCluster
+ */
 void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
 {
     unsigned int current_cluster = fs_info->root_cluster;
@@ -151,7 +201,6 @@ void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
             if (dir_entry->DIR_Name[0] == 0x00)
                 break;
             
-
             if (dir_entry->DIR_Name[0] == 0xe5 || dir_entry->DIR_Attr == 0x0f)
             {
                 dir_entry++;
@@ -188,6 +237,7 @@ void display_root_directory(char *file_mem, FileSystemInfo *fs_info)
     printf("Total number of entries = %d\n", entries_cnt);
 }
 
+// helper functions
 unsigned char *read_file_data(char *file_mem, FileSystemInfo *fs_info, unsigned int starting_cluster, unsigned int file_size)
 {
     unsigned char *data = malloc(file_size);
@@ -316,20 +366,34 @@ int recover_clusters(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry)
     return 1;
 }
 
+
+/**
+ * Milestone 8
+ * Borrowed ideas from ChatGPT:
+ * 1. Identify Unallocated Clusters within the First 20 Clusters
+ * 2. Generate All Possible Cluster Combinations (1 to 5 clusters)
+ * 3. Iterate Through Each Combination:
+ *      - Read and concatenate data from the clusters
+ *      - Compute the SHA-1 hash of the concatenated data
+ *      - Compare with the target SHA-1 hash
+ *      - If a match is found, recover the file
+ * 
+ * The provided pseudo code from ChatGPT helps me get through this milestone
+ * - chat history: https://chatgpt.com/share/674ffbfe-0bec-8003-b65e-5f79f25feb81
+ */
+
 void update_fat_sequence(char *file_mem, FileSystemInfo *fs_info, unsigned int *sequence, int seq_len)
 {
     unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
-    int i;
-    for (i = 0; i < seq_len; i++)
+    for (int i = 0; i < seq_len; i++)
     {
         unsigned int cluster = sequence[i];
         unsigned int next_cluster = (i == seq_len - 1) ? 0x0FFFFFF8 : sequence[i + 1];
-        unsigned int fat;
-        for (fat = 0; fat < fs_info->num_fats; fat++) 
+        for (unsigned int fat = 0; fat < fs_info->num_fats; fat++) 
         {
             unsigned int fat_offset = fat_start + fat * fs_info->fat_size * fs_info->bytes_per_sector + cluster * 4;
-            unsigned int *fat_entry = (unsigned int *)(file_mem + fat_offset);
-            *fat_entry = next_cluster;
+            unsigned int fat_entry_value = next_cluster;
+            memcpy(file_mem + fat_offset, &fat_entry_value, sizeof(fat_entry_value));
         }
     }
 }
@@ -339,44 +403,44 @@ void get_unallocated_clusters(char *file_mem, FileSystemInfo *fs_info, unsigned 
     unsigned int fat_start = fs_info->reserved_sector_count * fs_info->bytes_per_sector;
     int count = 0;
     unsigned int cluster;
-    for (cluster = 2; cluster <= 21; cluster++) 
+    for (cluster = 2; cluster < 20; cluster++) 
     {
         unsigned int fat_offset = fat_start + cluster * 4;
-        unsigned int *fat_entry = (unsigned int *)(file_mem + fat_offset);
-        if (*fat_entry == 0x00000000)
+        unsigned int fat_entry;
+        memcpy(&fat_entry, file_mem + fat_offset, sizeof(fat_entry));
+        fat_entry = fat_entry & 0x0FFFFFFF;
+        if (fat_entry == 0x00000000)
             clusters[count++] = cluster;
     }
     *num_clusters = count;
 }
 
-int check_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, 
-                    unsigned char *target_hash, unsigned int *sequence, int seq_len)
+int check_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash,
+                   unsigned int *sequence, int seq_len, unsigned char *data_buffer)
 {
     unsigned int file_size = entry->DIR_FileSize;
     unsigned int cluster_size = fs_info->cluster_size;
-    unsigned char *data = malloc(file_size);
     unsigned int bytes_read = 0;
-    int i;
-    for (i = 0; i < seq_len; i++)
+    for (int i = 0; i < seq_len; i++)
     {
         unsigned int cluster = sequence[i];
         unsigned int offset = fs_info->data_region_offset + (cluster - 2) * cluster_size;
         unsigned int to_read = (file_size - bytes_read > cluster_size) ? cluster_size : (file_size - bytes_read);
-        memcpy(data + bytes_read, file_mem + offset, to_read);
+        memcpy(data_buffer + bytes_read, file_mem + offset, to_read);
         bytes_read += to_read;
     }
     unsigned char computed_hash[SHA_DIGEST_LENGTH];
-    SHA1(data, file_size, computed_hash);
-    free(data);
+    SHA1(data_buffer, file_size, computed_hash);
     return memcmp(computed_hash, target_hash, SHA_DIGEST_LENGTH) == 0;
 }
 
-int search_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash, unsigned int *clusters, 
-                        int num_clusters, int clusters_needed, unsigned int *current_sequence, int depth, int *used)
+int search_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash,
+                    unsigned int *clusters, int num_clusters, int clusters_needed, unsigned int *current_sequence,
+                    int depth, int *used, unsigned char *data_buffer)
 {
     if (depth == clusters_needed)
     {
-        if (check_sequence(file_mem, fs_info, entry, target_hash, current_sequence, clusters_needed))
+        if (check_sequence(file_mem, fs_info, entry, target_hash, current_sequence, clusters_needed, data_buffer))
         {
             update_fat_sequence(file_mem, fs_info, current_sequence, clusters_needed);
             return 1;
@@ -391,7 +455,7 @@ int search_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, un
             used[i] = 1;
             current_sequence[depth] = clusters[i];
             if (search_sequence(file_mem, fs_info, entry, target_hash, clusters, num_clusters, clusters_needed,
-                               current_sequence, depth + 1, used))
+                               current_sequence, depth + 1, used, data_buffer))
                 return 1;
             used[i] = 0;
         }
@@ -399,14 +463,18 @@ int search_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, un
     return 0;
 }
 
-int find_matching_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry,unsigned char *target_hash, 
-                            unsigned int *clusters, int num_clusters, int clusters_needed, unsigned int *first_cluster)
+int find_matching_sequence(char *file_mem, FileSystemInfo *fs_info, DirEntry *entry, unsigned char *target_hash, 
+                           unsigned int *clusters, int num_clusters, int clusters_needed, unsigned int *first_cluster)
 {
     unsigned int *sequence = malloc(sizeof(unsigned int) * clusters_needed);
     int *used = calloc(num_clusters, sizeof(int));
-    int result = search_sequence(file_mem, fs_info, entry, target_hash, clusters, num_clusters, clusters_needed, sequence, 0, used);
+    unsigned int file_size = entry->DIR_FileSize;
+    unsigned char *data_buffer = malloc(file_size);
+    int result = search_sequence(file_mem, fs_info, entry, target_hash, clusters, num_clusters, clusters_needed,
+                                 sequence, 0, used, data_buffer);
     if (result == 1)
         *first_cluster = sequence[0];
+    free(data_buffer);
     free(sequence);
     free(used);
     return result;
@@ -479,18 +547,16 @@ void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char 
             int num_clusters;
             get_unallocated_clusters(file_mem, fs_info, clusters, &num_clusters);
             int clusters_needed = (target_entry->DIR_FileSize + fs_info->cluster_size - 1) / fs_info->cluster_size;
-            if (clusters_needed > 5) 
-                clusters_needed = 5;
+            if (clusters_needed > 5 || num_clusters > 20)
+                return; 
             unsigned int first_cluster;
             int result = find_matching_sequence(file_mem, fs_info, target_entry, target_hash, clusters, num_clusters, clusters_needed, &first_cluster);
             if (result == 1)
             {
                 // update the starting cluster in the directory entry
-                target_entry->DIR_FstClusHI = (first_cluster >> 16) & 0xffff;
-                target_entry->DIR_FstClusLO = first_cluster & 0xffff;
-                // restore the first character of the directory entry
+                target_entry->DIR_FstClusHI = (first_cluster >> 16) & 0xFFFF;
+                target_entry->DIR_FstClusLO = first_cluster & 0xFFFF;
                 target_entry->DIR_Name[0] = filename[0];
-                // success message
                 printf("%s: successfully recovered with SHA-1\n", filename);
                 recovered = 1;
                 break;
@@ -519,6 +585,7 @@ void recover_file(char *file_mem, char *filename, FileSystemInfo *fs_info, char 
             printf("%s: successfully recovered\n", filename);
     } 
 }
+
 
 int main(int argc, char **argv) 
 {
