@@ -16,7 +16,7 @@ A collection of small systems and C programming labs and exercises. These labs f
 - nyufile/             — a FAT32 / disk-image file-manipulation lab
 - nyuc/                — small utilities and argument-manipulation helpers
 - other top-level files: Makefiles, archives, small metadata files
----
+
 
 ## Lab summaries
 
@@ -42,7 +42,7 @@ Notes
 - The directory also contains a packaged zip of the lab and object files for reference.
 - The autograder for this lab (nyush-autograder) contains inputs and reference outputs for automated evaluation.
 
----
+
 
 ### nyuenc — simple file encoder/encrypter
 What it is
@@ -65,7 +65,7 @@ How to build and run
 Notes
 - The presence of perf and strace outputs suggests this lab was profiled; they are useful references for performance or system-call behavior discussions.
 
----
+
 
 ### nyufile — FAT32 / disk-image file tool
 What it is
@@ -86,7 +86,7 @@ How to build and run
 Notes
 - The disk image is present in the repository to make testing reproducible without external resources.
 
----
+
 
 ### nyuc — small utilities and argument-manipulation helpers
 What it is
